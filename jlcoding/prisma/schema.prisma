@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // 运行时连接（Neon 池化）
+  directUrl = env("DIRECT_DATABASE_URL") // 迁移/建表直连（非池化）
 }
 
 model Project {

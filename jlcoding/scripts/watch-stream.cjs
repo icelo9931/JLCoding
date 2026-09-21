@@ -1,6 +1,9 @@
 // 流式 SSE 调试客户端：逐事件打印时间戳，规避整体 body 超时
+// 用法：node scripts/watch-stream.cjs [baseUrl] [需求]
 async function main() {
-  const base = 'http://localhost:3000'
+  const base = process.argv[2] || 'http://localhost:3000'
+  const demand = process.argv[3] || '做一个待办事项应用，支持添加、完成、删除和筛选'
+  console.log(`target: ${base}`)
   const project = await (await fetch(`${base}/api/projects`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -11,7 +14,7 @@ async function main() {
   const res = await fetch(`${base}/api/projects/${project.id}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: '做一个待办事项应用，支持添加、完成、删除和筛选' }),
+    body: JSON.stringify({ message: demand }),
   })
   if (!res.ok || !res.body) throw new Error(`chat ${res.status}`)
 

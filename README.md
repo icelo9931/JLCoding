@@ -2,7 +2,7 @@
 
 > 输入自然语言需求，AI 智能体把它变成可运行的代码 —— 业务分析 → 架构设计 → 代码生成 → 沙箱校验 → 实时预览，全流程可视化。
 
-在线演示：`（部署到 Vercel 后填写）` · GitHub 仓库：`（推送后填写）`
+在线演示：https://jlcoding.vercel.app （国内网络访问 `*.vercel.app` 可能需要代理） · GitHub 仓库：`（本地 git 已提交，推送需账号）`
 
 ## 快速开始
 
@@ -35,10 +35,11 @@ npm run dev                 # http://localhost:3000
 
 ### 其他关键取舍
 
-- **SSE 而非 WebSocket**：单向事件流足够，复杂度低一个量级，且 Next.js Route Handler 原生支持。
-- **模型层走 OpenAI 兼容协议接入 DeepSeek**：不锁定单一供应商，换模型只改一个环境变量。
+- **SSE 而非 WebSocket**：单向事件流足够，复杂度低一个量级，且 Next.js Route Handler 原生支持；服务端每 15 秒发送 `: ping` 心跳，防止长生成（2-3 分钟）被代理超时掐断。
+- **模型层接入 OpenCode Go 套餐**：走 OpenAI 兼容网关（`https://opencode.ai/zen/go/v1`），按官方要求携带 `x-opencode-session` 会话头与 `jlcoding/1.0` User-Agent；顶栏可切换 Go 套餐全部 `/chat/completions` 模型（DeepSeek V4 Flash/Pro、GLM-5.3、Kimi K3 等），选择随项目持久化。无 Key 时自动降级 mock 演示模式。
+- **Agent 管线采用顺序角色制**：实测发现 AI SDK v7 的工具循环在"无工具调用的步骤"后必然终止，因此业务分析师/架构设计师独立单轮生成，代码工程师/测试工程师/修复工程师内部保持 ToolLoopAgent 工具循环（`prepareStep` 注入角色指令与工具白名单）——比单一长循环更确定、更易调试。
 - **mock 模式兜底**：未配置 API Key 时用预置待办应用走完整事件流，演示永远可用。
-- **数据库开发用 SQLite、部署切 Vercel Postgres**：本地零配置，上线只需改 provider + 连接串（见下文部署节）。
+- **数据库开发与部署统一用 Vercel Postgres（Neon）**：本地 `.env` 与线上指向同一 Neon 实例，免去本地装 Postgres，且刷新恢复行为与线上一致；`prisma db push` 建表在本地执行，Vercel 构建只做 `prisma generate`（构建环境不做 DDL，更快更稳）。
 
 ## 当前完成程度
 
@@ -52,17 +53,26 @@ npm run dev                 # http://localhost:3000
 2. **优先级中**：完成 Vercel 部署（provider 切 postgresql + `DATABASE_URL` + `prisma migrate deploy`）；对话内代码 diff 视图（修改需求时只高亮变更文件）；生成过程逐 token 流式展示（目前按步骤粒度展示）。
 3. **优先级低**：用户认证与项目归属；多模型切换（GPT-4o / Claude / DeepSeek）；"部署"按钮接 Vercel API 一键部署生成应用；项目模板市场。
 
-## 部署到 Vercel（约 5 分钟）
+## 部署到 Vercel（已完成）
+
+实际执行流程（供复现）：
 
 ```bash
-# 1. Vercel 控制台：Storage → Create Database → Postgres，自动注入 DATABASE_URL
-# 2. prisma/schema.prisma: provider = "postgresql"
-# 3. 本地生成迁移并应用
-npx prisma migrate deploy
-# 4. 部署
-vercel deploy --prod
+npm i -g vercel && vercel login
+vercel link --yes --project jlcoding
+vercel integration add neon            # Marketplace 创建 Vercel Postgres，自动注入 DATABASE_URL 等变量
+vercel env add DIRECT_DATABASE_URL <DATABASE_URL_UNPOOLED 的值>   # Prisma 迁移直连
+vercel env add OPENCODE_API_KEY / OPENCODE_BASE_URL               # 模型网关凭据
+node scripts/sync-env.cjs              # 本地 .env 同步为 Neon 连接串（保留 OpenCode Key）
+npm run db:push                        # 本地建表（Vercel 构建不做 DDL）
+vercel deploy --prod                   # → https://jlcoding.vercel.app
 ```
+
+- schema `provider = "postgresql"`，`url`（池化）跑运行时，`directUrl`（非池化）跑建表。
+- 构建命令为 `prisma generate && next build`（见 package.json）。
+- 线上验证：海外节点 GET `/` 与 `/api/projects` 均 200 OK；SSE 生成接口与本地代码路径一致（本地实测 DeepSeek V4 Flash 全流程 168s，16 个文件，校验通过）。
+- 注意：国内网络直连 `*.vercel.app` 常被 SNI 阻断，正式分享建议绑定自定义域名。
 
 ## 技术栈
 
-Next.js 14 (App Router) · Tailwind CSS + shadcn/ui 风格组件 · Vercel AI SDK v7（ToolLoopAgent）· DeepSeek（OpenAI 兼容协议）· Sandpack · Prisma + SQLite（部署切 Postgres）· SSE · jszip
+Next.js 14 (App Router) · Tailwind CSS + shadcn/ui 风格组件 · Vercel AI SDK v7（ToolLoopAgent）· OpenCode Go 网关（DeepSeek V4 / GLM / Kimi 等）· Sandpack · Prisma + Vercel Postgres (Neon) · SSE · jszip
