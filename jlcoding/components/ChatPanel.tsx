@@ -114,6 +114,7 @@ export function ChatPanel({ messages, running, error, status, awaiting, mode, mo
               placeholder="想补充或调整？在这里输入，点击「补充并重新分析」（可选）"
               className="mt-2.5 w-full resize-none rounded-lg border border-zinc-800 bg-zinc-900 p-2.5 text-xs outline-none placeholder:text-zinc-600 focus:border-indigo-600"
             />
+            <p className="mt-1.5 text-[10px] text-zinc-600">复杂应用（日历/图表等大代码量）生成较慢，可在下方模型栏切换 DeepSeek V4 Pro 提升质量与速度</p>
             <div className="mt-2.5 flex items-center justify-end gap-2">
               <Button
                 variant="outline"

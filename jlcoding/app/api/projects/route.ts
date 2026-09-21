@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { isDbReachable, dbErrorText } from '@/lib/db-errors'
 
 export async function GET() {
+  if (!(await isDbReachable())) {
+    return NextResponse.json({ error: dbErrorText() }, { status: 503 })
+  }
   const projects = await db.project.findMany({
     orderBy: { updatedAt: 'desc' },
     include: { _count: { select: { files: true, messages: true } } },
@@ -10,6 +14,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  if (!(await isDbReachable())) {
+    return NextResponse.json({ error: dbErrorText() }, { status: 503 })
+  }
   const { name, mode } = await req.json().catch(() => ({ name: '', mode: '' }))
   const project = await db.project.create({
     data: {

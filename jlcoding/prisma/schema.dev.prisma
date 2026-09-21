@@ -1,0 +1,48 @@
+// 本地开发用 SQLite schema（scripts/dev.mjs 自动选用）
+// 线上（Vercel/Render）使用 prisma/schema.prisma（PostgreSQL + Neon）
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id        String    @id @default(cuid())
+  name      String
+  status    String    @default("draft")
+  mode      String    @default("novice")
+  model     String?
+  messages  Message[]
+  files     File[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  step      String?
+  agent     String?
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+}
+
+model File {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  path      String
+  content   String
+  language  String?
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, path])
+  @@index([projectId])
+}

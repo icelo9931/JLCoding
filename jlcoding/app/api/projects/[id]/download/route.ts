@@ -1,10 +1,17 @@
 import JSZip from 'jszip'
 import { db } from '@/lib/db'
+import { isDbReachable, dbErrorText } from '@/lib/db-errors'
 
 export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
+  if (!(await isDbReachable())) {
+    return new Response(JSON.stringify({ error: dbErrorText() }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   const project = await db.project.findUnique({
     where: { id: params.id },
     include: { files: true },

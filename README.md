@@ -2,20 +2,20 @@
 
 > 输入自然语言需求，AI 智能体把它变成可运行的代码 —— 业务分析 → 架构设计 → 代码生成 → 沙箱校验 → 实时预览，全流程可视化。
 
-在线演示：https://jlcoding.vercel.app （国内网络访问 `*.vercel.app` 可能需要代理） · GitHub 仓库：`（本地 git 已提交，推送需账号）`
+在线演示：https://jlcoding.vercel.app （国内推荐用 Render 链接）· Render（国内可达）：`（部署后填写）` · GitHub 仓库：https://github.com/icelo9931/JLCoding
 
-## 快速开始
+## 本地开发
 
 ```bash
 cd jlcoding
 npm install
-cp .env.example .env        # 填入 DEEPSEEK_API_KEY（不填则进入 mock 演示模式）
-npx prisma migrate dev
-npm run dev                 # http://localhost:3000
+cp .env.example .env        # 填入 OPENCODE_API_KEY（不填则 mock 模式）；DATABASE_URL 默认 SQLite
+npm run dev                 # scripts/dev.mjs：自动按 DATABASE_URL 选择 schema，SQLite 零外部依赖
 ```
 
-- 冒烟测试：`node scripts/smoke.mjs`（需 dev server 已启动）
-- 类型检查 / 构建：`npx tsc --noEmit` / `npm run build`
+- 本地默认 **SQLite**（`prisma/schema.dev.prisma`，`file:./dev.db`）；线上（Vercel/Render）用 **Neon Postgres**（`prisma/schema.prisma`）
+- 从 Neon 迁移历史项目到本地：`node scripts/migrate-neon.cjs`（需 `.env.neon` 保留 Neon 连接串）
+- 冒烟测试：`node scripts/smoke2.cjs`（三场景：确认/追加/暂停续跑）；`node scripts/watch-stream.cjs`（流式观察）
 
 ## 实现思路与关键取舍
 
@@ -52,6 +52,16 @@ npm run dev                 # http://localhost:3000
 1. **优先级最高**：接入 E2B 真实沙箱，支持全栈应用（后端 API、数据库），并用真实 `npm run build` 替代模拟校验；自动修复改为多轮循环直到构建通过。
 2. **优先级中**：完成 Vercel 部署（provider 切 postgresql + `DATABASE_URL` + `prisma migrate deploy`）；对话内代码 diff 视图（修改需求时只高亮变更文件）；生成过程逐 token 流式展示（目前按步骤粒度展示）。
 3. **优先级低**：用户认证与项目归属；多模型切换（GPT-4o / Claude / DeepSeek）；"部署"按钮接 Vercel API 一键部署生成应用；项目模板市场。
+
+## 部署到 Render（国内可达入口，已完成配置）
+
+Render 免费 Web Service（新加坡区域，`*.onrender.com` 国内大多可直连）。仓库根目录的 `render.yaml` 已定义 Blueprint：
+
+1. Render 控制台 → **New → Blueprint** → 选择 `icelo9931/JLCoding` 仓库
+2. 按提示填入 3 个 Secret 环境变量（`DATABASE_URL` / `DIRECT_DATABASE_URL` 填 Neon 连接串，`OPENCODE_API_KEY` 填 Go Key），`OPENCODE_BASE_URL` 已内置
+3. Deploy；之后每次 `git push` 自动部署
+
+**免费层注意**：15 分钟无流量会休眠（首开约 50 秒）。保活方案：注册 [cron-job.org](https://cron-job.org)（免费）→ Create Job → URL 填 `https://<你的应用>.onrender.app/` → 每 10 分钟执行一次 → 即可常驻。
 
 ## 部署到 Vercel（已完成）
 

@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: jlcoding
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: jlcoding
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.0
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_DATABASE_URL
+        sync: false
+      - key: OPENCODE_API_KEY
+        sync: false
+      - key: OPENCODE_BASE_URL
+        value: https://opencode.ai/zen/go/v1

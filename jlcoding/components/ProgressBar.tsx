@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Loader2, Check, Clock } from 'lucide-react'
 
@@ -12,6 +13,28 @@ export function ProgressBar({ progress, stepLabel, running, status, error }: {
   status: string
   error: string | null
 }) {
+  const [elapsed, setElapsed] = useState(0)
+  const startRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (running && startRef.current === null) {
+      startRef.current = Date.now()
+    } else if (!running && status !== 'paused') {
+      startRef.current = null
+      setElapsed(0)
+    }
+  }, [running, status])
+
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(() => {
+      if (startRef.current) setElapsed(Math.round((Date.now() - startRef.current) / 1000))
+    }, 1000)
+    return () => clearInterval(t)
+  }, [running])
+
+  const elapsedText = elapsed > 0 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}` : ''
+
   return (
     <div className="border-b bg-zinc-950/80 px-4 py-2.5 backdrop-blur">
       <div className="flex items-center gap-4">
@@ -46,13 +69,13 @@ export function ProgressBar({ progress, stepLabel, running, status, error }: {
             style={{ width: `${progress}%` }}
           />
         </div>
-        <span className="flex w-32 items-center justify-end gap-1.5 text-sm text-zinc-400">
+        <span className="flex w-36 items-center justify-end gap-1.5 text-sm text-zinc-400">
           {error ? (
             '生成失败'
           ) : status === 'paused' ? (
             <><Clock className="h-3.5 w-3.5" /> 已暂停 · {progress}%</>
           ) : running ? (
-            <><Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />{stepLabel || '处理中'}… {progress}%</>
+            <><Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />{stepLabel || '处理中'}… {progress}%{elapsedText && <span className="text-zinc-500">（{elapsedText}）</span>}</>
           ) : status === 'awaiting' ? (
             <span className="text-indigo-300">等待你的确认</span>
           ) : progress === 100 ? (

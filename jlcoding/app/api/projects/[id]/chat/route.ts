@@ -3,6 +3,7 @@ import { Sandbox } from '@/lib/sandbox'
 import { runAnalyze, runContinue, PausedError, type CompletedStages } from '@/lib/agent'
 import { languageOf } from '@/lib/utils'
 import { DEFAULT_MODEL, isValidModel } from '@/lib/models'
+import { isDbReachable, dbErrorText } from '@/lib/db-errors'
 import type { ServerEvent } from '@/lib/types'
 
 export const runtime = 'nodejs'
@@ -22,6 +23,13 @@ export async function POST(
 ) {
   const { message, model, phase } = await req.json()
   const projectId = params.id
+
+  if (!(await isDbReachable())) {
+    return new Response(JSON.stringify({ error: dbErrorText() }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
   const project = await db.project.findUnique({ where: { id: projectId } })
   if (!project) {

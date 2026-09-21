@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
     "build": "prisma generate && next build",
     "db:push": "prisma db push",
     "start": "next start",
@@ -35,7 +35,10 @@
     "eslint": "^8",
     "eslint-config-next": "14.2.35",
     "postcss": "^8",
+    "postgres": "^3.4.9",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"
-  }
+  },
+  "dev": "node scripts/dev.mjs",
+  "db:push": "node scripts/dev.mjs --db-only"
 }
