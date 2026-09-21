@@ -1,77 +1,68 @@
 'use client'
 
 import Link from 'next/link'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { Button } from '@/components/ui/button'
-import { GO_MODELS } from '@/lib/models'
-import { cn } from '@/lib/utils'
-import { Download, Rocket, Terminal, ArrowLeft, ChevronDown, Check } from 'lucide-react'
+import { Download, Rocket, Terminal, ArrowLeft, Pause, Play } from 'lucide-react'
 
-export function TopBar({ projectName, projectId, status, model, onModelChange, modelDisabled }: {
+export function BrandMark() {
+  return (
+    <span className="flex items-center gap-2.5">
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
+        <Terminal className="h-4 w-4" />
+      </span>
+      <span className="text-lg font-bold">jlCoding</span>
+    </span>
+  )
+}
+
+export function TopBar({ projectName, projectId, status, mode, running, onPause, onResume }: {
   projectName: string
   projectId: string
   status: string
-  model: string
-  onModelChange: (model: string) => void
-  modelDisabled: boolean
+  mode: string
+  running: boolean
+  onPause: () => void
+  onResume: () => void
 }) {
-  const current = GO_MODELS.find((m) => m.id === model) ?? GO_MODELS[0]
   return (
     <header className="flex h-14 items-center gap-3 border-b bg-zinc-950 px-4">
-      <Link href="/" className="flex items-center gap-2 text-zinc-300 hover:text-white">
+      <Link href="/" className="flex items-center gap-2 text-zinc-400 transition-colors hover:text-white">
         <ArrowLeft className="h-4 w-4" />
       </Link>
       <Link href="/" className="flex items-center gap-2 font-semibold">
-        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-indigo-600 text-sm font-bold">jl</span>
-        <span>jlCoding</span>
+        <BrandMark />
       </Link>
       <span className="text-zinc-700">/</span>
-      <span className="max-w-[200px] truncate text-sm text-zinc-300">{projectName}</span>
+      <span className="max-w-[220px] truncate text-sm text-zinc-300">{projectName}</span>
+      <span className={cn2(mode)}>
+        {mode === 'expert' ? '专家模式' : '小白模式'}
+      </span>
       {status === 'ready' && (
-        <span className="rounded-full border border-emerald-800 bg-emerald-950 px-2 py-0.5 text-xs text-emerald-400">已就绪</span>
+        <span className="rounded-full border border-emerald-800 bg-emerald-950 px-2.5 py-0.5 text-xs text-emerald-400">已就绪</span>
+      )}
+      {status === 'awaiting' && (
+        <span className="rounded-full border border-indigo-800 bg-indigo-950 px-2.5 py-0.5 text-xs text-indigo-300">待确认</span>
       )}
       {status === 'building' && (
-        <span className="animate-pulse rounded-full border border-indigo-800 bg-indigo-950 px-2 py-0.5 text-xs text-indigo-300">构建中</span>
+        <span className="animate-pulse rounded-full border border-indigo-800 bg-indigo-950 px-2.5 py-0.5 text-xs text-indigo-300">构建中</span>
+      )}
+      {status === 'paused' && (
+        <span className="rounded-full border border-amber-800 bg-amber-950 px-2.5 py-0.5 text-xs text-amber-400">已暂停</span>
       )}
       {status === 'error' && (
-        <span className="rounded-full border border-red-800 bg-red-950 px-2 py-0.5 text-xs text-red-400">出错</span>
+        <span className="rounded-full border border-red-800 bg-red-950 px-2.5 py-0.5 text-xs text-red-400">出错</span>
       )}
       <div className="ml-auto flex items-center gap-2">
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
-            <button
-              disabled={modelDisabled}
-              title={modelDisabled ? '生成进行中，暂不能切换模型' : '切换 OpenCode Go 模型'}
-              className="flex h-8 items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white disabled:opacity-50"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              {current.label}
-              <ChevronDown className="h-3.5 w-3.5 text-zinc-500" />
-            </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              sideOffset={6}
-              align="end"
-              className="z-50 min-w-[180px] rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl"
-            >
-              <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-zinc-500">OpenCode Go 模型</div>
-              {GO_MODELS.map((m) => (
-                <DropdownMenu.Item
-                  key={m.id}
-                  onSelect={() => onModelChange(m.id)}
-                  className={cn(
-                    'flex cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-xs outline-none',
-                    m.id === current.id ? 'bg-indigo-950/60 text-indigo-300' : 'text-zinc-300 data-[highlighted]:bg-zinc-800'
-                  )}
-                >
-                  {m.label}
-                  {m.id === current.id && <Check className="h-3.5 w-3.5" />}
-                </DropdownMenu.Item>
-              ))}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+        {running && (
+          <Button variant="destructive" size="sm" onClick={onPause} title="暂停生成（已完成阶段保留，稍后可继续）">
+            <Pause className="h-4 w-4" /> 暂停
+          </Button>
+        )}
+        {status === 'paused' && !running && (
+          <Button size="sm" onClick={onResume}>
+            <Play className="h-4 w-4" /> 继续生成
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -91,13 +82,8 @@ export function TopBar({ projectName, projectId, status, model, onModelChange, m
   )
 }
 
-export function BrandMark() {
-  return (
-    <span className="flex items-center gap-2">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold">
-        <Terminal className="h-4 w-4" />
-      </span>
-      <span className="text-lg font-bold">jlCoding</span>
-    </span>
-  )
+function cn2(mode: string) {
+  return mode === 'expert'
+    ? 'rounded-full border border-violet-800 bg-violet-950 px-2.5 py-0.5 text-xs text-violet-300'
+    : 'rounded-full border border-sky-800 bg-sky-950 px-2.5 py-0.5 text-xs text-sky-300'
 }

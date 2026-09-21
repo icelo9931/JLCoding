@@ -12,7 +12,9 @@ export interface ChatMessage {
   agent?: string | null
 }
 
-export type BuildStatus = 'draft' | 'building' | 'ready' | 'error'
+export type BuildStatus = 'draft' | 'building' | 'awaiting' | 'paused' | 'ready' | 'error'
+
+export type Phase = 'analyze' | 'continue'
 
 export function useAgentStream(projectId: string, initial: {
   messages: ChatMessage[]
@@ -27,7 +29,11 @@ export function useAgentStream(projectId: string, initial: {
   const [status, setStatus] = useState<BuildStatus>(initial.status)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [awaiting, setAwaiting] = useState<string | null>(null) // 待确认的分析结果
   const lastInputRef = useRef<string | null>(null)
+  const lastModelRef = useRef<string>('deepseek-v4-flash')
+  const lastPhaseRef = useRef<Phase>('analyze')
+  const abortRef = useRef<AbortController | null>(null)
 
   const applyEvent = useCallback((event: ServerEvent) => {
     switch (event.type) {
@@ -51,7 +57,9 @@ export function useAgentStream(projectId: string, initial: {
             { id: nextId(), agent: event.agent, kind: 'text', title: `${event.agent} 输出`, detail: event.result, status: 'done', createdAt: Date.now() },
           ]
         })
-        setMessages((prev) => [...prev, { role: 'assistant', content: event.result, agent: event.agent }])
+        if (event.agent !== '业务分析师') {
+          setMessages((prev) => [...prev, { role: 'assistant', content: event.result, agent: event.agent }])
+        }
         break
       case 'file_created':
       case 'file_updated':
@@ -79,10 +87,23 @@ export function useAgentStream(projectId: string, initial: {
         setProgress(Math.round((event.step / event.total) * 100))
         setStepLabel(event.label)
         break
+      case 'awaiting_confirmation':
+        setAwaiting(event.analysis)
+        setStatus('awaiting')
+        setRunning(false)
+        setProgress(20)
+        setStepLabel('等待确认')
+        break
       case 'preview_ready':
         setProgress(100)
         setStatus('ready')
         setStepLabel('预览就绪')
+        setAwaiting(null)
+        break
+      case 'paused':
+        setStatus('paused')
+        setRunning(false)
+        setStepLabel('已暂停')
         break
       case 'error':
         setError(event.message)
@@ -91,27 +112,30 @@ export function useAgentStream(projectId: string, initial: {
         break
       case 'complete':
         setStatus('ready')
+        setRunning(false)
+        setAwaiting(null)
         break
     }
   }, [])
 
-  const send = useCallback(async (content: string, model?: string) => {
-    if (!content.trim() || running) return
-    lastInputRef.current = content
+  const request = useCallback(async (body: { message?: string; phase: Phase }, model: string) => {
     setRunning(true)
     setError(null)
     setStatus('building')
-    setMessages((prev) => [...prev, { role: 'user', content }])
+    if (body.phase === 'continue') setAwaiting(null)
+    const ac = new AbortController()
+    abortRef.current = ac
 
     try {
       const response = await fetch(`/api/projects/${projectId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content, model }),
+        body: JSON.stringify({ ...body, model }),
+        signal: ac.signal,
       })
       if (!response.ok || !response.body) {
-        const body = await response.text()
-        throw new Error(body || `请求失败 (${response.status})`)
+        const detail = await response.text()
+        throw new Error(detail || `请求失败 (${response.status})`)
       }
 
       const reader = response.body.getReader()
@@ -132,15 +156,49 @@ export function useAgentStream(projectId: string, initial: {
         }
       }
     } catch (e) {
-      applyEvent({ type: 'error', message: e instanceof Error ? e.message : String(e) })
+      if (ac.signal.aborted) {
+        // 用户主动暂停
+        setStatus('paused')
+        setStepLabel('已暂停')
+      } else {
+        applyEvent({ type: 'error', message: e instanceof Error ? e.message : String(e) })
+      }
     } finally {
       setRunning(false)
+      abortRef.current = null
     }
-  }, [projectId, running, applyEvent])
+  }, [projectId, applyEvent])
+
+  // 提交需求（或追加内容）：只跑分析，等待确认
+  const analyze = useCallback((content: string, model: string) => {
+    if (!content.trim() || running) return
+    lastInputRef.current = content
+    lastModelRef.current = model
+    lastPhaseRef.current = 'analyze'
+    setMessages((prev) => [...prev, { role: 'user', content }])
+    return request({ message: content, phase: 'analyze' }, model)
+  }, [running, request])
+
+  // 确认分析，继续生成（断点恢复也走这里）
+  const confirmGenerate = useCallback((model: string) => {
+    if (running) return
+    lastModelRef.current = model
+    lastPhaseRef.current = 'continue'
+    return request({ phase: 'continue' }, model)
+  }, [running, request])
+
+  // 暂停：中止请求流，服务端标记 paused，已完成阶段已落库
+  const pause = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   const retry = useCallback(() => {
-    if (lastInputRef.current) send(lastInputRef.current)
-  }, [send])
+    if (lastPhaseRef.current === 'analyze' && lastInputRef.current) {
+      analyze(lastInputRef.current, lastModelRef.current)
+    } else {
+      confirmGenerate(lastModelRef.current)
+    }
+  }, [analyze, confirmGenerate])
 
-  return { messages, logs, files, progress, stepLabel, status, error, running, send, retry, setLogs }
+  return { messages, logs, files, progress, stepLabel, status, error, running, awaiting, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
 }

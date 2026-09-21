@@ -4,7 +4,7 @@ import { useState } from 'react'
 import * as Collapsible from '@radix-ui/react-collapsible'
 import { cn } from '@/lib/utils'
 import type { LogEntry } from '@/lib/types'
-import { FileCode2, TerminalSquare, ListTree, ChevronRight, Loader2, CheckCircle2, XCircle, File as FileIcon } from 'lucide-react'
+import { FileCode2, TerminalSquare, ListTree, ChevronRight, Loader2, CheckCircle2, XCircle, File as FileIcon, Sparkles } from 'lucide-react'
 
 const AGENT_COLORS: Record<string, string> = {
   业务分析师: 'text-sky-400',
@@ -17,16 +17,52 @@ const AGENT_COLORS: Record<string, string> = {
 
 type Tab = 'logs' | 'files' | 'terminal'
 
-export function AgentLogPanel({ logs, files }: {
+export function AgentLogPanel({ logs, files, simple }: {
   logs: LogEntry[]
   files: Record<string, string>
+  simple: boolean
 }) {
   const [tab, setTab] = useState<Tab>('logs')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
 
   const paths = Object.keys(files).sort()
   const terminalLogs = logs.filter((l) => l.kind === 'command')
+  const lastCommand = terminalLogs[terminalLogs.length - 1]
+  const runningEntry = logs.find((l) => l.status === 'running')
 
+  // ---------- 小白模式：友好阶段摘要，隐藏文件/代码/终端细节 ----------
+  if (simple) {
+    const summaries: { label: string; state: 'done' | 'running' | 'idle'; hint?: string }[] = [
+      { label: '分析需求', state: logs.some((l) => l.agent === '业务分析师' && l.status === 'done') ? 'done' : runningEntry?.agent === '业务分析师' ? 'running' : 'idle' },
+      { label: '设计架构', state: logs.some((l) => l.agent === '架构设计师' && l.status === 'done') ? 'done' : runningEntry?.agent === '架构设计师' ? 'running' : 'idle' },
+      { label: '编写代码', state: paths.length > 0 ? 'done' : runningEntry?.agent === '代码工程师' ? 'running' : 'idle', hint: paths.length > 0 ? `已生成 ${paths.length} 个文件` : undefined },
+      { label: '构建校验', state: lastCommand ? (lastCommand.status === 'error' ? 'idle' : 'done') : runningEntry?.agent === '测试工程师' ? 'running' : 'idle', hint: lastCommand ? (lastCommand.status === 'error' ? '发现问题，修复中…' : '通过 ✓') : undefined },
+    ]
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex items-center gap-2 border-b px-3 py-2.5 text-xs font-medium text-zinc-300">
+          <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
+          生成进度
+        </div>
+        <div className="flex-1 space-y-1 overflow-y-auto p-3">
+          {summaries.map((s) => (
+            <div key={s.label} className="flex items-center gap-2.5 rounded-lg border border-zinc-800/60 bg-zinc-900/40 px-3 py-2.5 text-sm">
+              {s.state === 'done' && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />}
+              {s.state === 'running' && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-indigo-400" />}
+              {s.state === 'idle' && <span className="h-4 w-4 shrink-0 rounded-full border border-zinc-700" />}
+              <span className={cn(s.state === 'idle' ? 'text-zinc-500' : 'text-zinc-200')}>{s.label}</span>
+              {s.hint && <span className="ml-auto text-xs text-zinc-500">{s.hint}</span>}
+            </div>
+          ))}
+          <p className="px-1 pt-2 text-[11px] leading-relaxed text-zinc-600">
+            切换到专家模式可查看每个文件的完整代码与构建日志
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // ---------- 专家模式：完整三视图 ----------
   return (
     <div className="flex h-full flex-col">
       <div className="flex border-b">
@@ -39,8 +75,8 @@ export function AgentLogPanel({ logs, files }: {
             key={key}
             onClick={() => setTab(key)}
             className={cn(
-              'flex flex-1 items-center justify-center gap-1.5 px-2 py-2 text-xs transition-colors',
-              tab === key ? 'border-b-2 border-indigo-500 text-white' : 'text-zinc-500 hover:text-zinc-300'
+              'flex flex-1 items-center justify-center gap-1.5 px-2 py-2.5 text-xs transition-colors',
+              tab === key ? 'border-b-2 border-indigo-500 font-medium text-white' : 'text-zinc-500 hover:text-zinc-300'
             )}
           >
             <Icon className="h-3.5 w-3.5" />{label}
@@ -53,7 +89,7 @@ export function AgentLogPanel({ logs, files }: {
           <div className="space-y-1.5 p-3">
             {logs.length === 0 && <Empty text="Agent 工作过程将在这里逐步展示" />}
             {logs.map((log) => (
-              <Collapsible.Root key={log.id} defaultOpen={log.kind === 'text' && Boolean(log.detail)}>
+              <Collapsible.Root key={log.id} defaultOpen={false}>
                 <Collapsible.Trigger className="group flex w-full items-start gap-2 rounded-md border bg-zinc-900/60 px-2.5 py-2 text-left text-xs hover:border-zinc-600">
                   {log.status === 'running' && <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-indigo-400" />}
                   {log.status === 'done' && <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />}

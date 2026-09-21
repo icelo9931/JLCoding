@@ -11,7 +11,8 @@ datasource db {
 model Project {
   id        String    @id @default(cuid())
   name      String
-  status    String    @default("draft") // draft | building | ready | error
+  status    String    @default("draft") // draft | building | awaiting | paused | ready | error
+  mode      String    @default("novice") // novice | expert
   model     String? // OpenCode Go 模型 ID
   messages  Message[]
   files     File[]

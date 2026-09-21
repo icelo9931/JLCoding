@@ -6,10 +6,15 @@ export type ServerEvent =
   | { type: 'command_run'; command: string; stdout: string; stderr: string; exitCode: number }
   | { type: 'preview_ready' }
   | { type: 'task_progress'; step: number; total: number; label: string }
+  | { type: 'awaiting_confirmation'; analysis: string }
+  | { type: 'paused' }
   | { type: 'error'; message: string }
   | { type: 'complete'; projectId: string }
 
 export type AgentRole = '业务分析师' | '架构设计师' | '代码工程师' | '测试工程师' | '修复工程师'
+
+// 管线阶段标识（Message.step），用于断点恢复
+export type PipelineStage = 'analysis' | 'design' | 'engineering' | 'validation' | 'fix'
 
 export const ROLE_STEPS: { role: AgentRole; label: string }[] = [
   { role: '业务分析师', label: '分析需求' },

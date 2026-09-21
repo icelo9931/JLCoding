@@ -10,9 +10,12 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const { name } = await req.json().catch(() => ({ name: '' }))
+  const { name, mode } = await req.json().catch(() => ({ name: '', mode: '' }))
   const project = await db.project.create({
-    data: { name: name?.trim() || '未命名项目' },
+    data: {
+      name: name?.trim() || '未命名项目',
+      mode: mode === 'expert' ? 'expert' : 'novice',
+    },
   })
   return NextResponse.json(project, { status: 201 })
 }

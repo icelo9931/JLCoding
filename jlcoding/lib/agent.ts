@@ -9,9 +9,23 @@ export interface RunContext {
   userInput: string
   sandbox: Sandbox
   onEvent: (event: ServerEvent) => void
-  existingFiles?: { path: string; content: string }[]
   model?: string
-  sessionId?: string // OpenCode Go 网关要求的稳定会话 ID（x-opencode-session），用于路由与 prompt 缓存
+  sessionId?: string // OpenCode Go 网关要求的稳定会话 ID（x-opencode-session）
+  abortSignal?: AbortSignal // 暂停：中止信号
+}
+
+// 断点恢复：已完成阶段由调用方（路由层从 Message.step 读取）传入
+export interface CompletedStages {
+  analysis: boolean
+  design: boolean
+  engineering: boolean
+}
+
+export class PausedError extends Error {
+  constructor() {
+    super('PAUSED')
+    this.name = 'PausedError'
+  }
 }
 
 const CODE_CONSTRAINTS = `
@@ -70,21 +84,50 @@ function getModel(modelId?: string, sessionId?: string) {
   return opencode(isValidModel(modelId) ? modelId! : DEFAULT_MODEL)
 }
 
-export async function runAgent(ctx: RunContext): Promise<void> {
-  if (!hasModel()) {
-    await runMockAgent(ctx)
-    return
+// ---------- 阶段 1：业务分析师（独立运行，产出需求理解，等待用户确认） ----------
+
+// 纯文本角色：单轮生成（模块级，两个阶段共用）
+async function askSingle(
+  c: RunContext, roleName: string, instructions: string, prompt: string
+): Promise<string> {
+  const started = Date.now()
+  const agent = new ToolLoopAgent({
+    model: getModel(c.model, c.sessionId),
+    instructions,
+    stopWhen: isStepCount(1),
+  })
+  let result
+  try {
+    result = await agent.generate({ prompt, abortSignal: c.abortSignal })
+  } catch (e) {
+    if (c.abortSignal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw new PausedError()
+    throw e
   }
-  await runRealAgent(ctx)
+  console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
+  return (result.text ?? '').trim()
 }
 
-// ---------- 真实模式：顺序角色管线，每个角色一个 ToolLoopAgent 实例 ----------
-// 说明：ai v7 的工具循环在"无工具调用的步骤"后必然终止（循环条件要求上一步
-// 存在工具调用），因此业务分析师/架构设计师等纯文本角色各自独立运行一轮
-// generate；代码工程师/测试工程师/修复工程师内部保持 ToolLoopAgent 工具
-// 循环，通过 prepareStep 注入角色指令与可用工具。
+export async function runAnalyze(ctx: RunContext): Promise<string> {
+  if (!hasModel()) return runMockAnalyze(ctx)
+  const analysis = await askSingle(ctx, ROLE_NAMES[0], ROLE_PROMPTS[0], `用户需求：${ctx.userInput}`)
+  return analysis
+}
 
-async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model, sessionId }: RunContext) {
+// ---------- 阶段 2：设计 → 编码 → 校验 → 修复（支持断点跳过与暂停） ----------
+
+export async function runContinue(
+  ctx: RunContext & { priorAnalysis: string; existingFiles?: { path: string; content: string }[] },
+  completed: CompletedStages
+): Promise<void> {
+  if (!hasModel()) {
+    await runMockContinue(ctx, completed)
+    return
+  }
+  const { userInput, sandbox, onEvent, model, sessionId, abortSignal } = ctx
+  const checkPaused = () => {
+    if (abortSignal?.aborted) throw new PausedError()
+  }
+
   let lastValidation: { exitCode: number; stderr: string } = { exitCode: 0, stderr: '' }
   let validationRan = false
 
@@ -96,6 +139,7 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
         content: z.string().describe('完整文件内容'),
       }),
       execute: async ({ path, content }) => {
+        if (abortSignal?.aborted) throw new PausedError()
         const isNew = sandbox.read(path) === null
         sandbox.write(path, content)
         onEvent({ type: isNew ? 'file_created' : 'file_updated', path, content })
@@ -106,6 +150,7 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
       description: '在沙箱中执行 shell 命令，如 npm run build',
       inputSchema: z.object({ command: z.string() }),
       execute: async ({ command }) => {
+        if (abortSignal?.aborted) throw new PausedError()
         const result = await sandbox.run(command)
         if (command.includes('build') || command.includes('test')) {
           lastValidation = { exitCode: result.exitCode, stderr: result.stderr }
@@ -125,26 +170,9 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
     }),
   }
 
-  // 纯文本角色：单轮生成
-  const ask = async (roleName: string, instructions: string, prompt: string): Promise<string> => {
-    const started = Date.now()
-    const agent = new ToolLoopAgent({
-      model: getModel(model, sessionId),
-      instructions,
-      stopWhen: isStepCount(1),
-    })
-    const result = await agent.generate({ prompt })
-    console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
-    return (result.text ?? '').trim()
-  }
-
   // 工具角色：ToolLoopAgent 工具循环，prepareStep 注入角色指令与工具白名单
   const runToolLoop = async (
-    roleName: string,
-    instructions: string,
-    prompt: string,
-    activeTools: string[],
-    maxSteps: number
+    roleName: string, instructions: string, prompt: string, activeTools: string[], maxSteps: number
   ): Promise<string> => {
     const started = Date.now()
     const agent = new ToolLoopAgent({
@@ -153,42 +181,58 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
       stopWhen: isStepCount(maxSteps),
       prepareStep: () => ({ instructions, activeTools }),
     })
-    const result = await agent.generate({ prompt })
+    let result
+    try {
+      result = await agent.generate({ prompt, abortSignal })
+    } catch (e) {
+      if (abortSignal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw new PausedError()
+      throw e
+    }
     console.log(`[jlcoding] ${roleName} 完成（${result.steps.length} 步），耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
     return (result.text ?? '').trim()
   }
 
-  // 角色进度事件（角色 0 的开始事件由路由层先发出，这里不重复）
-  const startRole = (i: number, message: string) => {
-    onEvent({ type: 'agent_start', agent: ROLE_NAMES[i], message })
-    onEvent({ type: 'task_progress', step: i + 1, total: 5, label: ROLE_NAMES[i] })
+  // Step 1 架构设计师（断点跳过）
+  let design = ''
+  if (!completed.design) {
+    checkPaused()
+    onEvent({ type: 'agent_start', agent: ROLE_NAMES[1], message: '正在设计架构' })
+    onEvent({ type: 'task_progress', step: 2, total: 5, label: '架构设计师' })
+    design = await askSingle(ctx, ROLE_NAMES[1], ROLE_PROMPTS[1], `用户需求：${userInput}\n\n业务分析师输出：\n${ctx.priorAnalysis}`)
+    onEvent({ type: 'agent_complete', agent: ROLE_NAMES[1], result: design })
+    // 落库由路由层在 onEvent 中处理（step 由路由写入）
+  } else {
+    design = '[断点恢复] 架构设计已完成，直接进入编码'
   }
 
-  // Step 0 业务分析师
-  const analysis = await ask(ROLE_NAMES[0], ROLE_PROMPTS[0], `用户需求：${userInput}`)
-  onEvent({ type: 'agent_complete', agent: ROLE_NAMES[0], result: analysis })
+  // Step 2 代码工程师（断点跳过）
+  if (!completed.engineering) {
+    checkPaused()
+    onEvent({ type: 'agent_start', agent: ROLE_NAMES[2], message: '正在编写代码' })
+    onEvent({ type: 'task_progress', step: 3, total: 5, label: '代码工程师' })
+    const engineerExtra = ctx.existingFiles?.length
+      ? `\n注意：沙箱中已存在以下文件（可能来自上次中断）：${ctx.existingFiles.map((f) => f.path).join(', ')}。请检查并补全/修正需要的文件，未变的文件不要重写。`
+      : ''
+    const engineerSummary = await runToolLoop(
+      ROLE_NAMES[2],
+      `${ROLE_PROMPTS[2]}${engineerExtra}`,
+      `用户需求：${userInput}\n\n架构设计：\n${design}`,
+      ['writeFile', 'readFile'],
+      12
+    )
+    onEvent({ type: 'agent_complete', agent: ROLE_NAMES[2], result: engineerSummary || '已完成全部代码文件编写' })
+  } else {
+    onEvent({ type: 'agent_start', agent: ROLE_NAMES[2], message: '代码已生成（断点恢复），跳过编码' })
+  }
 
-  // Step 1 架构设计师
-  startRole(1, '正在设计架构')
-  const design = await ask(ROLE_NAMES[1], ROLE_PROMPTS[1], `用户需求：${userInput}\n\n业务分析师输出：\n${analysis}`)
-  onEvent({ type: 'agent_complete', agent: ROLE_NAMES[1], result: design })
+  if (!sandbox.hasFiles()) {
+    throw new Error('Agent 未能生成任何代码文件，请重试或换一个更明确的需求描述')
+  }
 
-  // Step 2 代码工程师（工具循环：多轮 writeFile）
-  startRole(2, '正在编写代码')
-  const engineerExtra = existingFiles?.length
-    ? `\n注意：项目中已存在以下文件：${existingFiles.map((f) => f.path).join(', ')}。用户的需求是对现有应用的修改，请复用现有结构，只改需要改的文件，未变的文件不要重写。`
-    : ''
-  const engineerSummary = await runToolLoop(
-    ROLE_NAMES[2],
-    `${ROLE_PROMPTS[2]}${engineerExtra}`,
-    `用户需求：${userInput}\n\n架构设计：\n${design}`,
-    ['writeFile', 'readFile'],
-    12
-  )
-  onEvent({ type: 'agent_complete', agent: ROLE_NAMES[2], result: engineerSummary || '已完成全部代码文件编写' })
-
-  // Step 3 测试工程师（工具循环：runCommand 校验）
-  startRole(3, '正在校验构建')
+  // Step 3 测试工程师
+  checkPaused()
+  onEvent({ type: 'agent_start', agent: ROLE_NAMES[3], message: '正在校验构建' })
+  onEvent({ type: 'task_progress', step: 4, total: 5, label: '测试工程师' })
   const testSummary = await runToolLoop(
     ROLE_NAMES[3],
     ROLE_PROMPTS[3],
@@ -197,7 +241,6 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
     4
   )
   if (!validationRan) {
-    // 模型未执行校验命令时由系统强制执行权威校验
     const result = await sandbox.run('npm run build')
     lastValidation = { exitCode: result.exitCode, stderr: result.stderr }
     onEvent({ type: 'command_run', command: 'npm run build', stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode })
@@ -210,8 +253,10 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
   })
 
   // Step 4 修复工程师（仅校验失败时进入）
-  if (!passed && sandbox.hasFiles()) {
-    startRole(4, '正在修复错误')
+  if (!passed) {
+    checkPaused()
+    onEvent({ type: 'agent_start', agent: ROLE_NAMES[4], message: '正在修复错误' })
+    onEvent({ type: 'task_progress', step: 5, total: 5, label: '修复工程师' })
     const fixSummary = await runToolLoop(
       ROLE_NAMES[4],
       `${ROLE_PROMPTS[4]}\n\n构建错误信息：\n${lastValidation.stderr}`,
@@ -231,9 +276,6 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
     })
   }
 
-  if (!sandbox.hasFiles()) {
-    throw new Error('Agent 未能生成任何代码文件，请重试或换一个更明确的需求描述')
-  }
   if (lastValidation.exitCode !== 0) {
     onEvent({
       type: 'agent_start',
@@ -243,7 +285,27 @@ async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model,
   }
 }
 
-// ---------- Mock 模式：无 API Key 时走完整事件流（预置待办应用） ----------
+// ---------- Mock 模式（无 API Key 时走完整两阶段事件流） ----------
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+async function runMockAnalyze({ userInput }: RunContext): Promise<string> {
+  await sleep(900)
+  return `【mock 模式：未配置 OPENCODE_API_KEY，使用预置演示数据】
+
+应用定位：${userInput.slice(0, 40)}…
+
+功能清单：
+1. 任务添加与删除
+2. 完成状态切换
+3. 全部/进行中/已完成筛选
+4. 待完成计数
+
+用户故事：
+- 作为用户，我想要快速添加待办，以便不遗漏事项
+- 作为用户，我想要勾选完成，以便掌握进度
+- 作为用户，我想要筛选查看，以便聚焦当前任务`
+}
 
 const TODO_FILES: Record<string, string> = {
   'package.json': `{
@@ -354,33 +416,31 @@ button { border: none; background: #6366f1; color: #fff; padding: 10px 16px; bor
 `,
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-async function runMockAgent({ userInput, sandbox, onEvent }: RunContext) {
-  await sleep(800)
-  onEvent({
-    type: 'agent_complete',
-    agent: '业务分析师',
-    result: `【mock 模式：未配置 OPENCODE_API_KEY，使用预置演示数据】\n\n应用定位：${userInput.slice(0, 40)}…\n\n功能清单：\n1. 任务添加与删除\n2. 完成状态切换\n3. 全部/进行中/已完成筛选\n4. 待完成计数\n\n用户故事：\n- 作为用户，我想要快速添加待办，以便不遗漏事项\n- 作为用户，我想要勾选完成，以便掌握进度\n- 作为用户，我想要筛选查看，以便聚焦当前任务`,
-  })
-  onEvent({ type: 'task_progress', step: 2, total: 5, label: '架构设计师' })
-  onEvent({ type: 'agent_start', agent: '架构设计师', message: '正在设计架构' })
-  await sleep(800)
-  onEvent({
-    type: 'agent_complete',
-    agent: '架构设计师',
-    result: '组件树：\nApp\n├─ 输入区（input + 添加按钮）\n├─ 筛选器（all/active/done）\n└─ TodoItem × n\n\n状态管理：App 内 useState 管理 todos / input / filter，props 下发给 TodoItem。\n\n文件清单：package.json、index.js、App.js、TodoItem.js、styles.css',
-  })
-  onEvent({ type: 'task_progress', step: 3, total: 5, label: '代码工程师' })
-  onEvent({ type: 'agent_start', agent: '代码工程师', message: '正在编写代码' })
-  for (const [path, content] of Object.entries(TODO_FILES)) {
-    sandbox.write(path, content)
-    onEvent({ type: 'file_created', path, content })
-    await sleep(500)
+async function runMockContinue(ctx: RunContext & { priorAnalysis: string }, completed: CompletedStages): Promise<void> {
+  const { sandbox, onEvent } = ctx
+  if (!completed.design) {
+    onEvent({ type: 'agent_start', agent: '架构设计师', message: '正在设计架构' })
+    onEvent({ type: 'task_progress', step: 2, total: 5, label: '架构设计师' })
+    await sleep(800)
+    onEvent({
+      type: 'agent_complete',
+      agent: '架构设计师',
+      result: '组件树：\nApp\n├─ 输入区（input + 添加按钮）\n├─ 筛选器（all/active/done）\n└─ TodoItem × n\n\n状态管理：App 内 useState 管理 todos / input / filter，props 下发给 TodoItem。\n\n文件清单：package.json、index.js、App.js、TodoItem.js、styles.css',
+    })
   }
-  onEvent({ type: 'agent_complete', agent: '代码工程师', result: '已创建 5 个文件：package.json、index.js、App.js、TodoItem.js、styles.css' })
-  onEvent({ type: 'task_progress', step: 4, total: 5, label: '测试工程师' })
+  if (!completed.engineering) {
+    onEvent({ type: 'agent_start', agent: '代码工程师', message: '正在编写代码' })
+    onEvent({ type: 'task_progress', step: 3, total: 5, label: '代码工程师' })
+    for (const [path, content] of Object.entries(TODO_FILES)) {
+      if (ctx.abortSignal?.aborted) throw new PausedError()
+      sandbox.write(path, content)
+      onEvent({ type: 'file_created', path, content })
+      await sleep(400)
+    }
+    onEvent({ type: 'agent_complete', agent: '代码工程师', result: '已创建 5 个文件：package.json、index.js、App.js、TodoItem.js、styles.css' })
+  }
   onEvent({ type: 'agent_start', agent: '测试工程师', message: '正在校验构建' })
+  onEvent({ type: 'task_progress', step: 4, total: 5, label: '测试工程师' })
   const result = await sandbox.run('npm run build')
   onEvent({ type: 'command_run', command: 'npm run build', stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode })
   onEvent({ type: 'agent_complete', agent: '测试工程师', result: '构建校验：通过 ✓' })

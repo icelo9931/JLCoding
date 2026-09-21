@@ -15,6 +15,7 @@ interface ProjectDetail {
   id: string
   name: string
   status: string
+  mode: string
   model: string | null
   messages: { role: string; content: string; agent: string | null; step: string | null }[]
   files: { path: string; content: string }[]
@@ -36,7 +37,8 @@ export function Workspace({ projectId }: { projectId: string }) {
   }, [projectId])
 
   const initial = {
-    messages: (detail?.messages ?? []).filter((m) => m.role !== 'system') as ChatMessage[],
+    // 分析结果由确认卡片展示，不在聊天流中重复
+    messages: (detail?.messages ?? []).filter((m) => m.role === 'assistant' && m.step !== 'analysis') as ChatMessage[],
     files: Object.fromEntries((detail?.files ?? []).map((f) => [f.path, f.content])),
     status: (detail?.status ?? 'draft') as BuildStatus,
   }
@@ -48,68 +50,60 @@ export function Workspace({ projectId }: { projectId: string }) {
     if (detail?.model) setModel(detail.model)
   }, [detail?.model])
 
-  const sendWithModel = (content: string) => stream.send(content, model)
+  // 刷新恢复：待确认状态 → 从库里取最新分析展示确认卡片
+  useEffect(() => {
+    if (!detail) return
+    if (detail.status === 'awaiting') {
+      const analysis = [...detail.messages].reverse().find((m) => m.step === 'analysis')?.content
+      if (analysis) stream.setAwaiting(analysis)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail])
 
-  // 刷新恢复：从持久化消息重建工作日志
+  // 刷新恢复：从持久化消息重建工作日志（专家模式可见）
   useEffect(() => {
     if (!detail || stream.logs.length > 0) return
     const restored: LogEntry[] = []
     for (const m of detail.messages) {
-      if (m.role === 'assistant' && m.agent) {
+      if (m.role === 'assistant' && m.agent && m.step && m.step !== 'analysis') {
         restored.push({
-          id: `restore-${++restoreId}`,
-          agent: m.agent,
-          kind: 'text',
-          title: `${m.agent} 输出`,
-          detail: m.content,
-          status: 'done',
-          createdAt: 0,
+          id: `restore-${++restoreId}`, agent: m.agent, kind: 'text',
+          title: `${m.agent} 输出`, detail: m.content, status: 'done', createdAt: 0,
         })
       } else if (m.role === 'system' && m.step === 'validation') {
         restored.push({
-          id: `restore-${++restoreId}`,
-          agent: '测试工程师',
-          kind: 'command',
-          title: '$ npm run build',
-          detail: m.content.split('\n').slice(1).join('\n'),
-          status: 'done',
-          createdAt: 0,
+          id: `restore-${++restoreId}`, agent: '测试工程师', kind: 'command',
+          title: '$ npm run build', detail: m.content.split('\n').slice(1).join('\n'),
+          status: 'done', createdAt: 0,
         })
       }
     }
     for (const f of detail.files) {
       restored.push({
-        id: `restore-file-${++restoreId}`,
-        agent: '代码工程师',
-        kind: 'file',
-        title: `创建 ${f.path}`,
-        path: f.path,
-        content: f.content,
-        status: 'done',
-        createdAt: 0,
+        id: `restore-file-${++restoreId}`, agent: '代码工程师', kind: 'file',
+        title: `创建 ${f.path}`, path: f.path, content: f.content, status: 'done', createdAt: 0,
       })
     }
     if (restored.length) stream.setLogs(restored)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail])
 
-  // 首页快速开始：携带待发送需求进入
+  // 首页快速开始：携带待发送需求进入（先分析后确认）
   useEffect(() => {
     if (!detail || stream.running) return
     const pending = sessionStorage.getItem(`jlcoding:pending:${projectId}`)
-    if (pending && !streamHasSent(detail)) {
+    if (pending && !detail.messages.some((m) => m.role === 'user')) {
       sessionStorage.removeItem(`jlcoding:pending:${projectId}`)
-      stream.send(pending, detail.model ?? undefined)
+      stream.analyze(pending, detail.model ?? DEFAULT_MODEL)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail])
 
   const files = { ...initial.files, ...stream.files }
+  const mode = detail?.mode ?? 'novice'
 
   if (loadError) {
-    return (
-      <div className="flex h-screen items-center justify-center text-zinc-500">{loadError}</div>
-    )
+    return <div className="flex h-screen items-center justify-center text-zinc-500">{loadError}</div>
   }
 
   if (standalone) {
@@ -125,10 +119,18 @@ export function Workspace({ projectId }: { projectId: string }) {
       <TopBar
         projectName={detail?.name ?? '加载中…'}
         projectId={projectId}
-        status={detail ? (stream.status as string) : 'draft'}
-        model={model}
-        onModelChange={setModel}
-        modelDisabled={stream.running}
+        status={detail ? stream.status : 'draft'}
+        mode={mode}
+        running={stream.running}
+        onPause={stream.pause}
+        onResume={() => stream.confirmGenerate(model)}
+      />
+      <ProgressBar
+        progress={stream.progress}
+        stepLabel={stream.stepLabel}
+        running={stream.running}
+        status={stream.status}
+        error={stream.error}
       />
       <main className="grid flex-1 grid-cols-[minmax(320px,26%)_1fr_minmax(280px,24%)] overflow-hidden">
         <section className="flex flex-col overflow-hidden border-r">
@@ -136,28 +138,23 @@ export function Workspace({ projectId }: { projectId: string }) {
             messages={stream.messages}
             running={stream.running}
             error={stream.error}
-            onSend={sendWithModel}
+            status={stream.status}
+            awaiting={stream.awaiting}
+            mode={mode}
+            model={model}
+            onModelChange={setModel}
+            onAnalyze={(content) => stream.analyze(content, model)}
+            onConfirm={() => stream.confirmGenerate(model)}
             onRetry={stream.retry}
-            hasFiles={Object.keys(files).length > 0}
           />
         </section>
         <section className="overflow-hidden bg-zinc-900/40">
           <PreviewPanel files={files} building={stream.running} projectId={projectId} />
         </section>
         <section className="overflow-hidden border-l">
-          <AgentLogPanel logs={stream.logs} files={files} />
+          <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'} />
         </section>
       </main>
-      <ProgressBar
-        progress={stream.progress}
-        stepLabel={stream.stepLabel}
-        running={stream.running}
-        error={stream.error}
-      />
     </div>
   )
-}
-
-function streamHasSent(detail: ProjectDetail): boolean {
-  return detail.messages.some((m) => m.role === 'user')
 }
