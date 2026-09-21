@@ -2,7 +2,7 @@
 
 > 输入自然语言需求，AI 智能体把它变成可运行的代码 —— 业务分析 → 架构设计 → 代码生成 → 沙箱校验 → 实时预览，全流程可视化。
 
-在线演示：https://jlcoding.vercel.app （国内推荐用 Render 链接）· Render（国内可达）：`（部署后填写）` · GitHub 仓库：https://github.com/icelo9931/JLCoding
+在线演示：https://jlcoding.onrender.com （Render 新加坡，国内直连无需代理）· 备用：https://jlcoding.vercel.app （海外）· GitHub 仓库：https://github.com/icelo9931/JLCoding
 
 ## 本地开发
 
@@ -55,11 +55,11 @@ npm run dev                 # scripts/dev.mjs：自动按 DATABASE_URL 选择 sc
 
 ## 部署到 Render（国内可达入口，已完成配置）
 
-Render 免费 Web Service（新加坡区域，`*.onrender.com` 国内大多可直连）。仓库根目录的 `render.yaml` 已定义 Blueprint：
+Render 免费 Web Service（新加坡区域，`*.onrender.com` 国内实测直连无需代理）。仓库根目录的 `render.yaml` 已定义 Blueprint：
 
 1. Render 控制台 → **New → Blueprint** → 选择 `icelo9931/JLCoding` 仓库
-2. 按提示填入 3 个 Secret 环境变量（`DATABASE_URL` / `DIRECT_DATABASE_URL` 填 Neon 连接串，`OPENCODE_API_KEY` 填 Go Key），`OPENCODE_BASE_URL` 已内置
-3. Deploy；之后每次 `git push` 自动部署
+2. 按提示填入 3 个 Secret 环境变量（`DATABASE_URL` 填 Neon 池化串、`DIRECT_DATABASE_URL` 填 Neon 非池化串、`OPENCODE_API_KEY` 填 Go Key），`OPENCODE_BASE_URL` 已内置
+3. Deploy；线上地址 **https://jlcoding.onrender.com**（实测国内直连可用）
 
 **免费层注意**：15 分钟无流量会休眠（首开约 50 秒）。保活方案：注册 [cron-job.org](https://cron-job.org)（免费）→ Create Job → URL 填 `https://<你的应用>.onrender.app/` → 每 10 分钟执行一次 → 即可常驻。
 
