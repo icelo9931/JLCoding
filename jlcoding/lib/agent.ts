@@ -1,0 +1,387 @@
+import { ToolLoopAgent, tool, isStepCount, type ToolSet } from 'ai'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { z } from 'zod'
+import { Sandbox } from './sandbox'
+import type { ServerEvent } from './types'
+import { DEFAULT_MODEL, isValidModel } from './models'
+
+export interface RunContext {
+  userInput: string
+  sandbox: Sandbox
+  onEvent: (event: ServerEvent) => void
+  existingFiles?: { path: string; content: string }[]
+  model?: string
+  sessionId?: string // OpenCode Go 网关要求的稳定会话 ID（x-opencode-session），用于路由与 prompt 缓存
+}
+
+const CODE_CONSTRAINTS = `
+技术约束（必须严格遵守，否则预览无法渲染）：
+- 生成纯前端 React 应用，只依赖 react 和 react-dom，禁止引入任何其他第三方库（无 axios / lodash / antd 等）。
+- 所有文件放在项目根目录，使用 JavaScript + JSX，不使用 TypeScript。
+- 必须创建以下文件：
+  1. package.json — {"name":"app","dependencies":{"react":"^18.2.0","react-dom":"^18.2.0"}}
+  2. index.js — 入口，使用 react-dom/client 的 createRoot 渲染 App 组件
+  3. App.js — 根组件
+  4. styles.css — 全局样式（在 index.js 或 App.js 中 import './styles.css'）
+- 可以按需创建更多组件文件（如 TodoItem.js），从 './文件名' 导入。
+- 所有交互状态用 React hooks 管理，确保应用可直接运行且无控制台报错。`
+
+const ROLE_PROMPTS: string[] = [
+  `你是资深业务分析师。分析用户需求，输出：
+1. 应用名称与一句话定位
+2. 功能清单（按优先级排列，每项一句话说明）
+3. 3 个核心用户故事（作为…我想要…以便…格式）
+输出精炼的中文要点，不要 JSON，不要寒暄。分析完成后直接输出结果，不要调用任何工具。`,
+
+  `你是资深前端架构设计师。基于上文业务分析师的功能清单，设计技术方案，输出：
+1. 组件树（用缩进文本表示层级）
+2. 每个组件的职责与关键 state/props
+3. 数据结构定义与状态管理方案
+4. 文件清单（path → 用途）
+输出精炼的中文要点。设计完成后直接输出结果，不要调用任何工具。`,
+
+  `你是资深代码工程师。严格按架构设计师的文件清单，使用 writeFile 工具逐个创建完整可运行的代码文件。
+${CODE_CONSTRAINTS}
+每个文件必须一次写入完整内容（包含全部 import/export）。写完所有文件后，用一两句话总结创建了哪些文件，不要调用其他工具。`,
+
+  `你是测试工程师。使用 runCommand 工具运行 "npm run build" 校验代码。若校验失败，明确指出所有错误。
+然后输出一行校验结论。除 runCommand 外不要调用其他工具。`,
+
+  `你是修复工程师。根据测试工程师报告的错误，使用 writeFile 工具只修复出错的文件（不要重写整个项目），然后使用 runCommand 工具再次运行 "npm run build" 确认修复。
+修复完成后用一句话说明修复内容。`,
+]
+
+const ROLE_NAMES = ['业务分析师', '架构设计师', '代码工程师', '测试工程师', '修复工程师']
+
+export function hasModel(): boolean {
+  return Boolean(process.env.OPENCODE_API_KEY)
+}
+
+function getModel(modelId?: string, sessionId?: string) {
+  const opencode = createOpenAICompatible({
+    name: 'opencode',
+    baseURL: process.env.OPENCODE_BASE_URL || 'https://opencode.ai/zen/go/v1',
+    apiKey: process.env.OPENCODE_API_KEY,
+    headers: {
+      'User-Agent': 'jlcoding/1.0',
+      ...(sessionId ? { 'x-opencode-session': sessionId } : {}),
+    },
+  })
+  return opencode(isValidModel(modelId) ? modelId! : DEFAULT_MODEL)
+}
+
+export async function runAgent(ctx: RunContext): Promise<void> {
+  if (!hasModel()) {
+    await runMockAgent(ctx)
+    return
+  }
+  await runRealAgent(ctx)
+}
+
+// ---------- 真实模式：顺序角色管线，每个角色一个 ToolLoopAgent 实例 ----------
+// 说明：ai v7 的工具循环在"无工具调用的步骤"后必然终止（循环条件要求上一步
+// 存在工具调用），因此业务分析师/架构设计师等纯文本角色各自独立运行一轮
+// generate；代码工程师/测试工程师/修复工程师内部保持 ToolLoopAgent 工具
+// 循环，通过 prepareStep 注入角色指令与可用工具。
+
+async function runRealAgent({ userInput, sandbox, onEvent, existingFiles, model, sessionId }: RunContext) {
+  let lastValidation: { exitCode: number; stderr: string } = { exitCode: 0, stderr: '' }
+  let validationRan = false
+
+  const tools: ToolSet = {
+    writeFile: tool({
+      description: '将完整代码文件写入沙箱文件系统',
+      inputSchema: z.object({
+        path: z.string().describe('文件路径，如 App.js'),
+        content: z.string().describe('完整文件内容'),
+      }),
+      execute: async ({ path, content }) => {
+        const isNew = sandbox.read(path) === null
+        sandbox.write(path, content)
+        onEvent({ type: isNew ? 'file_created' : 'file_updated', path, content })
+        return { success: true, path }
+      },
+    }),
+    runCommand: tool({
+      description: '在沙箱中执行 shell 命令，如 npm run build',
+      inputSchema: z.object({ command: z.string() }),
+      execute: async ({ command }) => {
+        const result = await sandbox.run(command)
+        if (command.includes('build') || command.includes('test')) {
+          lastValidation = { exitCode: result.exitCode, stderr: result.stderr }
+          validationRan = true
+        }
+        onEvent({ type: 'command_run', command, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode })
+        return result
+      },
+    }),
+    readFile: tool({
+      description: '读取沙箱中的文件内容',
+      inputSchema: z.object({ path: z.string() }),
+      execute: async ({ path }) => {
+        const content = sandbox.read(path)
+        return content === null ? { error: `文件不存在: ${path}` } : { path, content }
+      },
+    }),
+  }
+
+  // 纯文本角色：单轮生成
+  const ask = async (roleName: string, instructions: string, prompt: string): Promise<string> => {
+    const started = Date.now()
+    const agent = new ToolLoopAgent({
+      model: getModel(model, sessionId),
+      instructions,
+      stopWhen: isStepCount(1),
+    })
+    const result = await agent.generate({ prompt })
+    console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
+    return (result.text ?? '').trim()
+  }
+
+  // 工具角色：ToolLoopAgent 工具循环，prepareStep 注入角色指令与工具白名单
+  const runToolLoop = async (
+    roleName: string,
+    instructions: string,
+    prompt: string,
+    activeTools: string[],
+    maxSteps: number
+  ): Promise<string> => {
+    const started = Date.now()
+    const agent = new ToolLoopAgent({
+      model: getModel(model, sessionId),
+      tools,
+      stopWhen: isStepCount(maxSteps),
+      prepareStep: () => ({ instructions, activeTools }),
+    })
+    const result = await agent.generate({ prompt })
+    console.log(`[jlcoding] ${roleName} 完成（${result.steps.length} 步），耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
+    return (result.text ?? '').trim()
+  }
+
+  // 角色进度事件（角色 0 的开始事件由路由层先发出，这里不重复）
+  const startRole = (i: number, message: string) => {
+    onEvent({ type: 'agent_start', agent: ROLE_NAMES[i], message })
+    onEvent({ type: 'task_progress', step: i + 1, total: 5, label: ROLE_NAMES[i] })
+  }
+
+  // Step 0 业务分析师
+  const analysis = await ask(ROLE_NAMES[0], ROLE_PROMPTS[0], `用户需求：${userInput}`)
+  onEvent({ type: 'agent_complete', agent: ROLE_NAMES[0], result: analysis })
+
+  // Step 1 架构设计师
+  startRole(1, '正在设计架构')
+  const design = await ask(ROLE_NAMES[1], ROLE_PROMPTS[1], `用户需求：${userInput}\n\n业务分析师输出：\n${analysis}`)
+  onEvent({ type: 'agent_complete', agent: ROLE_NAMES[1], result: design })
+
+  // Step 2 代码工程师（工具循环：多轮 writeFile）
+  startRole(2, '正在编写代码')
+  const engineerExtra = existingFiles?.length
+    ? `\n注意：项目中已存在以下文件：${existingFiles.map((f) => f.path).join(', ')}。用户的需求是对现有应用的修改，请复用现有结构，只改需要改的文件，未变的文件不要重写。`
+    : ''
+  const engineerSummary = await runToolLoop(
+    ROLE_NAMES[2],
+    `${ROLE_PROMPTS[2]}${engineerExtra}`,
+    `用户需求：${userInput}\n\n架构设计：\n${design}`,
+    ['writeFile', 'readFile'],
+    12
+  )
+  onEvent({ type: 'agent_complete', agent: ROLE_NAMES[2], result: engineerSummary || '已完成全部代码文件编写' })
+
+  // Step 3 测试工程师（工具循环：runCommand 校验）
+  startRole(3, '正在校验构建')
+  const testSummary = await runToolLoop(
+    ROLE_NAMES[3],
+    ROLE_PROMPTS[3],
+    `用户需求：${userInput}\n\n已生成的文件：${sandbox.list().map((f) => f.path).join(', ')}`,
+    ['runCommand', 'readFile'],
+    4
+  )
+  if (!validationRan) {
+    // 模型未执行校验命令时由系统强制执行权威校验
+    const result = await sandbox.run('npm run build')
+    lastValidation = { exitCode: result.exitCode, stderr: result.stderr }
+    onEvent({ type: 'command_run', command: 'npm run build', stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode })
+  }
+  const passed = lastValidation.exitCode === 0
+  onEvent({
+    type: 'agent_complete',
+    agent: ROLE_NAMES[3],
+    result: testSummary || (passed ? '构建校验：通过 ✓' : '构建校验：发现错误'),
+  })
+
+  // Step 4 修复工程师（仅校验失败时进入）
+  if (!passed && sandbox.hasFiles()) {
+    startRole(4, '正在修复错误')
+    const fixSummary = await runToolLoop(
+      ROLE_NAMES[4],
+      `${ROLE_PROMPTS[4]}\n\n构建错误信息：\n${lastValidation.stderr}`,
+      `用户需求：${userInput}\n\n当前文件：${sandbox.list().map((f) => f.path).join(', ')}`,
+      ['writeFile', 'runCommand', 'readFile'],
+      8
+    )
+    if (lastValidation.exitCode !== 0) {
+      const recheck = await sandbox.run('npm run build')
+      lastValidation = { exitCode: recheck.exitCode, stderr: recheck.stderr }
+      onEvent({ type: 'command_run', command: 'npm run build', stdout: recheck.stdout, stderr: recheck.stderr, exitCode: recheck.exitCode })
+    }
+    onEvent({
+      type: 'agent_complete',
+      agent: ROLE_NAMES[4],
+      result: fixSummary || (lastValidation.exitCode === 0 ? '修复完成，校验通过 ✓' : '已完成修复尝试'),
+    })
+  }
+
+  if (!sandbox.hasFiles()) {
+    throw new Error('Agent 未能生成任何代码文件，请重试或换一个更明确的需求描述')
+  }
+  if (lastValidation.exitCode !== 0) {
+    onEvent({
+      type: 'agent_start',
+      agent: '系统',
+      message: `警告：静态校验未完全通过（${lastValidation.stderr.split('\n')[0]}），预览以 Sandpack 实际编译结果为准`,
+    })
+  }
+}
+
+// ---------- Mock 模式：无 API Key 时走完整事件流（预置待办应用） ----------
+
+const TODO_FILES: Record<string, string> = {
+  'package.json': `{
+  "name": "todo-app",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}
+`,
+  'index.js': `import React from 'react'
+import { createRoot } from 'react-dom/client'
+import App from './App'
+import './styles.css'
+
+createRoot(document.getElementById('root')).render(<App />)
+`,
+  'App.js': `import React, { useState } from 'react'
+import TodoItem from './TodoItem'
+
+export default function App() {
+  const [todos, setTodos] = useState([
+    { id: 1, text: '欢迎使用 jlCoding 生成的待办应用', done: false },
+    { id: 2, text: '在输入框添加新任务', done: false },
+  ])
+  const [input, setInput] = useState('')
+  const [filter, setFilter] = useState('all')
+
+  const addTodo = () => {
+    const text = input.trim()
+    if (!text) return
+    setTodos((t) => [...t, { id: Date.now(), text, done: false }])
+    setInput('')
+  }
+
+  const toggle = (id) =>
+    setTodos((t) => t.map((x) => (x.id === id ? { ...x, done: !x.done } : x)))
+  const remove = (id) => setTodos((t) => t.filter((x) => x.id !== id))
+
+  const shown = todos.filter((x) =>
+    filter === 'all' ? true : filter === 'active' ? !x.done : x.done
+  )
+
+  return (
+    <div className="container">
+      <h1>我的待办</h1>
+      <div className="input-row">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && addTodo()}
+          placeholder="想做点什么？"
+        />
+        <button onClick={addTodo}>添加</button>
+      </div>
+      <div className="filters">
+        {['all', 'active', 'done'].map((f) => (
+          <button
+            key={f}
+            className={filter === f ? 'active' : ''}
+            onClick={() => setFilter(f)}
+          >
+            {f === 'all' ? '全部' : f === 'active' ? '进行中' : '已完成'}
+          </button>
+        ))}
+      </div>
+      <ul className="todo-list">
+        {shown.map((todo) => (
+          <TodoItem key={todo.id} todo={todo} onToggle={toggle} onRemove={remove} />
+        ))}
+      </ul>
+      <p className="count">{todos.filter((t) => !t.done).length} 项待完成</p>
+    </div>
+  )
+}
+`,
+  'TodoItem.js': `import React from 'react'
+
+export default function TodoItem({ todo, onToggle, onRemove }) {
+  return (
+    <li className={todo.done ? 'done' : ''}>
+      <label>
+        <input type="checkbox" checked={todo.done} onChange={() => onToggle(todo.id)} />
+        <span>{todo.text}</span>
+      </label>
+      <button className="delete" onClick={() => onRemove(todo.id)}>✕</button>
+    </li>
+  )
+}
+`,
+  'styles.css': `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #f5f6fa; color: #222; }
+.container { max-width: 480px; margin: 48px auto; background: #fff; border-radius: 16px; padding: 32px; box-shadow: 0 8px 32px rgba(0,0,0,.08); }
+h1 { font-size: 22px; margin-bottom: 20px; }
+.input-row { display: flex; gap: 8px; margin-bottom: 16px; }
+.input-row input { flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; }
+.input-row input:focus { border-color: #6366f1; }
+button { border: none; background: #6366f1; color: #fff; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.filters { display: flex; gap: 8px; margin-bottom: 16px; }
+.filters button { background: #eef0f6; color: #555; padding: 6px 12px; }
+.filters button.active { background: #6366f1; color: #fff; }
+.todo-list { list-style: none; }
+.todo-list li { display: flex; align-items: center; justify-content: space-between; padding: 10px 4px; border-bottom: 1px solid #f0f0f0; }
+.todo-list label { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; }
+.todo-list li.done span { text-decoration: line-through; color: #aaa; }
+.delete { background: none; color: #c33; padding: 4px 8px; font-size: 14px; }
+.count { margin-top: 16px; color: #888; font-size: 13px; }
+`,
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+async function runMockAgent({ userInput, sandbox, onEvent }: RunContext) {
+  await sleep(800)
+  onEvent({
+    type: 'agent_complete',
+    agent: '业务分析师',
+    result: `【mock 模式：未配置 OPENCODE_API_KEY，使用预置演示数据】\n\n应用定位：${userInput.slice(0, 40)}…\n\n功能清单：\n1. 任务添加与删除\n2. 完成状态切换\n3. 全部/进行中/已完成筛选\n4. 待完成计数\n\n用户故事：\n- 作为用户，我想要快速添加待办，以便不遗漏事项\n- 作为用户，我想要勾选完成，以便掌握进度\n- 作为用户，我想要筛选查看，以便聚焦当前任务`,
+  })
+  onEvent({ type: 'task_progress', step: 2, total: 5, label: '架构设计师' })
+  onEvent({ type: 'agent_start', agent: '架构设计师', message: '正在设计架构' })
+  await sleep(800)
+  onEvent({
+    type: 'agent_complete',
+    agent: '架构设计师',
+    result: '组件树：\nApp\n├─ 输入区（input + 添加按钮）\n├─ 筛选器（all/active/done）\n└─ TodoItem × n\n\n状态管理：App 内 useState 管理 todos / input / filter，props 下发给 TodoItem。\n\n文件清单：package.json、index.js、App.js、TodoItem.js、styles.css',
+  })
+  onEvent({ type: 'task_progress', step: 3, total: 5, label: '代码工程师' })
+  onEvent({ type: 'agent_start', agent: '代码工程师', message: '正在编写代码' })
+  for (const [path, content] of Object.entries(TODO_FILES)) {
+    sandbox.write(path, content)
+    onEvent({ type: 'file_created', path, content })
+    await sleep(500)
+  }
+  onEvent({ type: 'agent_complete', agent: '代码工程师', result: '已创建 5 个文件：package.json、index.js、App.js、TodoItem.js、styles.css' })
+  onEvent({ type: 'task_progress', step: 4, total: 5, label: '测试工程师' })
+  onEvent({ type: 'agent_start', agent: '测试工程师', message: '正在校验构建' })
+  const result = await sandbox.run('npm run build')
+  onEvent({ type: 'command_run', command: 'npm run build', stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode })
+  onEvent({ type: 'agent_complete', agent: '测试工程师', result: '构建校验：通过 ✓' })
+}
