@@ -27,6 +27,7 @@ export function useAgentStream(projectId: string, initial: {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [files, setFiles] = useState<Record<string, string>>(initial.files)
   const [progress, setProgress] = useState(initial.status === 'ready' ? 100 : 0)
+  const [currentStep, setCurrentStep] = useState(0) // 1-5，精确高亮当前阶段（避免多步同时转圈）
   const [stepLabel, setStepLabel] = useState('')
   const [status, setStatus] = useState<BuildStatus>(initial.status)
   const [error, setError] = useState<string | null>(null)
@@ -100,6 +101,7 @@ export function useAgentStream(projectId: string, initial: {
         break
       case 'task_progress':
         setProgress(Math.round((event.step / event.total) * 100))
+        setCurrentStep(event.step)
         setStepLabel(event.label)
         break
       case 'awaiting_confirmation':
@@ -111,6 +113,7 @@ export function useAgentStream(projectId: string, initial: {
         break
       case 'preview_ready':
         setProgress(100)
+        setCurrentStep(5)
         setStatus('ready')
         setStepLabel('预览就绪')
         setAwaiting(null)
@@ -235,5 +238,5 @@ export function useAgentStream(projectId: string, initial: {
     agentPromptRef.current = prompt
   }, [])
 
-  return { messages, logs, files, progress, stepLabel, status, error, running, awaiting, streaming, fileChips, setFileContext, setAgentPrompt, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
+  return { messages, logs, files, progress, currentStep, stepLabel, status, error, running, awaiting, streaming, fileChips, setFileContext, setAgentPrompt, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
 }

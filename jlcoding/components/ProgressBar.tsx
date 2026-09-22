@@ -6,8 +6,9 @@ import { Loader2, Check, Clock } from 'lucide-react'
 
 const STEP_LABELS = ['分析需求', '设计架构', '生成代码', '沙箱测试', '预览就绪']
 
-export function ProgressBar({ progress, stepLabel, running, status, error }: {
+export function ProgressBar({ progress, currentStep, stepLabel, running, status, error }: {
   progress: number
+  currentStep: number // 0=未开始，1-5 对应阶段
   stepLabel: string
   running: boolean
   status: string
@@ -40,8 +41,10 @@ export function ProgressBar({ progress, stepLabel, running, status, error }: {
       <div className="flex items-center gap-4">
         <div className="flex flex-1 items-center gap-2.5 overflow-hidden">
           {STEP_LABELS.map((label, i) => {
-            const done = progress === 100 || progress > ((i + 1) / 5) * 100
-            const isActive = (running || status === 'awaiting') && !done && progress > (i / 5) * 100 - 1
+            const stepNum = i + 1
+            // 精确单步高亮：完成 = currentStep > stepNum 或整体 ready；进行中 = currentStep === stepNum
+            const done = progress === 100 || (currentStep > stepNum && currentStep > 0)
+            const isActive = (running || status === 'awaiting') && currentStep === stepNum
             return (
               <div key={label} className="flex items-center gap-2 whitespace-nowrap">
                 <span
@@ -52,7 +55,7 @@ export function ProgressBar({ progress, stepLabel, running, status, error }: {
                     !done && !isActive && 'border-zinc-700 text-zinc-600'
                   )}
                 >
-                  {done ? <Check className="h-3 w-3" /> : isActive ? <Loader2 className="h-3 w-3 animate-spin" /> : i + 1}
+                  {done ? <Check className="h-3 w-3" /> : isActive ? <Loader2 className="h-3 w-3 animate-spin" /> : stepNum}
                 </span>
                 <span className={cn('text-sm', done || isActive ? 'font-medium text-zinc-200' : 'text-zinc-600')}>{label}</span>
                 {i < STEP_LABELS.length - 1 && <span className="text-zinc-700">→</span>}

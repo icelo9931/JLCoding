@@ -8,8 +8,8 @@ import { ChatPanel } from '@/components/ChatPanel'
 import { PreviewPanel } from '@/components/PreviewPanel'
 import { AgentLogPanel } from '@/components/AgentLogPanel'
 import { useAgentStream, type ChatMessage, type BuildStatus } from '@/hooks/useAgentStream'
-import { GenerationStream } from '@/components/GenerationStream'
 import { SkillMcpDialog } from '@/components/SkillMcpDialog'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { DEFAULT_MODEL } from '@/lib/models'
 import { loadCustom } from '@/lib/custom-store'
 import { parseFiles } from '@/lib/file-read'
@@ -165,52 +165,87 @@ export function Workspace({ projectId }: { projectId: string }) {
       />
       <ProgressBar
         progress={stream.progress}
+        currentStep={stream.currentStep}
         stepLabel={stream.stepLabel}
         running={stream.running}
         status={stream.status}
         error={stream.error}
       />
-      <main className="grid flex-1 grid-cols-[minmax(320px,26%)_1fr_minmax(280px,24%)] overflow-hidden">
-        <section className="flex flex-col overflow-hidden border-r">
-          <ChatPanel
-            messages={stream.messages}
-            running={stream.running}
-            error={stream.error}
-            status={stream.status}
-            awaiting={stream.awaiting}
-            streaming={stream.streaming}
-            fileChips={stream.fileChips}
-            onUpload={onUpload}
-            onRemoveFile={(i) => {
-              const chips = stream.fileChips.filter((_, j) => j !== i)
-              stream.setFileContext(chips.length ? null : null, chips)
-            }}            mode={mode}
-            model={model}
-            onModelChange={setModel}
-            onAnalyze={(content) => stream.analyze(content, model)}
-            onConfirm={() => stream.confirmGenerate(model)}
-            onRetry={stream.retry}
-          />
-        </section>
-        {/* 生成中：实时对话流；完成/暂停/待确认：预览 */}
-        {stream.running ? (
-          <section className="overflow-hidden">
-            <GenerationStream
-              streaming={stream.streaming}
-              files={files}
-              progress={stream.progress}
-              stepLabel={stream.stepLabel}
-            />
-          </section>
-        ) : (
-          <section className="overflow-hidden bg-zinc-900/40">
-            <PreviewPanel files={files} building={stream.running} projectId={projectId} />
-          </section>
-        )}
-        <section className="overflow-hidden border-l">
-          <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'} />
-        </section>
-      </main>
+      {stream.running ? (
+        // 生成中：两栏 —— 左=模型对话思考与实时输出，右=进度/工作日志
+        <PanelGroup key="layout-running" direction="horizontal" autoSaveId="jlcoding-2col" className="flex-1 overflow-hidden">
+          <Panel defaultSize={72} minSize={40}>
+            <section className="h-full overflow-hidden border-r">
+              <ChatPanel
+                messages={stream.messages}
+                running={stream.running}
+                error={stream.error}
+                status={stream.status}
+                awaiting={stream.awaiting}
+                streaming={stream.streaming}
+                fileChips={stream.fileChips}
+                onUpload={onUpload}
+                onRemoveFile={(i) => {
+                  const chips = stream.fileChips.filter((_, j) => j !== i)
+                  stream.setFileContext(null, chips)
+                }}
+                mode={mode}
+                model={model}
+                onModelChange={setModel}
+                onAnalyze={(content) => stream.analyze(content, model)}
+                onConfirm={() => stream.confirmGenerate(model)}
+                onRetry={stream.retry}
+              />
+            </section>
+          </Panel>
+          <PanelResizeHandle className="w-1.5 bg-zinc-900 transition-colors hover:bg-indigo-600" />
+          <Panel defaultSize={28} minSize={16}>
+            <section className="h-full overflow-hidden">
+              <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'} />
+            </section>
+          </Panel>
+        </PanelGroup>
+      ) : (
+        // 完成/暂停/待确认：三栏 —— 对话 / 实时预览 / 工作日志，宽度可拖拽（自动记忆）
+        <PanelGroup key="layout-3col" direction="horizontal" autoSaveId="jlcoding-3col" className="flex-1 overflow-hidden">
+          <Panel defaultSize={26} minSize={16}>
+            <section className="h-full overflow-hidden border-r">
+              <ChatPanel
+                messages={stream.messages}
+                running={stream.running}
+                error={stream.error}
+                status={stream.status}
+                awaiting={stream.awaiting}
+                streaming={stream.streaming}
+                fileChips={stream.fileChips}
+                onUpload={onUpload}
+                onRemoveFile={(i) => {
+                  const chips = stream.fileChips.filter((_, j) => j !== i)
+                  stream.setFileContext(null, chips)
+                }}
+                mode={mode}
+                model={model}
+                onModelChange={setModel}
+                onAnalyze={(content) => stream.analyze(content, model)}
+                onConfirm={() => stream.confirmGenerate(model)}
+                onRetry={stream.retry}
+              />
+            </section>
+          </Panel>
+          <PanelResizeHandle className="w-1.5 bg-zinc-900 transition-colors hover:bg-indigo-600" />
+          <Panel defaultSize={50} minSize={30}>
+            <section className="h-full overflow-hidden bg-zinc-900/40">
+              <PreviewPanel files={files} building={stream.running} projectId={projectId} />
+            </section>
+          </Panel>
+          <PanelResizeHandle className="w-1.5 bg-zinc-900 transition-colors hover:bg-indigo-600" />
+          <Panel defaultSize={24} minSize={14}>
+            <section className="h-full overflow-hidden border-l">
+              <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'} />
+            </section>
+          </Panel>
+        </PanelGroup>
+      )}
     </div>
   )
 }

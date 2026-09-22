@@ -85,6 +85,10 @@ export function SkillMcpDialog({ open, onOpenChange }: {
             {tab === 'skills' && (
               <>
                 {/* 内置技能（GitHub 注入） */}
+                <div className="rounded-xl border border-indigo-800/50 bg-indigo-950/20 p-3 text-xs leading-relaxed text-indigo-300/90">
+                  💡 打造属于你的代码风格：把你偏好的命名习惯、注释风格、目录结构与代码品味写成一条技能，
+                  jlCoding 之后生成的每一行代码都会带上你的风格印记——相当于给代码工程师一份你的「私人编码规范」。
+                </div>
                 {BUILT_IN_SKILLS.map((s) => (
                   <div key={s.id} className="rounded-xl border border-emerald-800/60 bg-emerald-950/20 p-3.5">
                     <div className="flex items-center gap-2 text-sm font-medium text-emerald-300">
@@ -108,7 +112,7 @@ export function SkillMcpDialog({ open, onOpenChange }: {
                   </div>
                 ))}
                 <div className="rounded-xl border border-dashed border-zinc-700 p-3">
-                  <div className="mb-2 flex items-center gap-1.5 text-xs text-zinc-400"><Plus className="h-3.5 w-3.5" />添加自定义技能（生成时注入代码工程师）</div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs text-zinc-400"><Plus className="h-3.5 w-3.5" />添加自定义技能（注入代码工程师，塑造你的代码风格）</div>
                   <input
                     value={skillForm.name}
                     onChange={(e) => setSkillForm((f) => ({ ...f, name: e.target.value }))}
