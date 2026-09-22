@@ -1,5 +1,6 @@
 export type ServerEvent =
   | { type: 'agent_start'; agent: string; message: string }
+  | { type: 'agent_delta'; agent: string; delta: string }
   | { type: 'agent_complete'; agent: string; result: string }
   | { type: 'file_created'; path: string; content: string }
   | { type: 'file_updated'; path: string; content: string }

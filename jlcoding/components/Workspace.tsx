@@ -8,6 +8,7 @@ import { ChatPanel } from '@/components/ChatPanel'
 import { PreviewPanel } from '@/components/PreviewPanel'
 import { AgentLogPanel } from '@/components/AgentLogPanel'
 import { useAgentStream, type ChatMessage, type BuildStatus } from '@/hooks/useAgentStream'
+import { GenerationStream } from '@/components/GenerationStream'
 import { DEFAULT_MODEL } from '@/lib/models'
 import type { LogEntry } from '@/lib/types'
 
@@ -37,8 +38,10 @@ export function Workspace({ projectId }: { projectId: string }) {
   }, [projectId])
 
   const initial = {
-    // 分析结果由确认卡片展示，不在聊天流中重复
-    messages: (detail?.messages ?? []).filter((m) => m.role === 'assistant' && m.step !== 'analysis') as ChatMessage[],
+    // 保留用户消息与各阶段输出；分析结果由确认卡片单独展示，不重复
+    messages: (detail?.messages ?? []).filter(
+      (m) => m.role === 'user' || (m.role === 'assistant' && m.step !== 'analysis')
+    ) as ChatMessage[],
     files: Object.fromEntries((detail?.files ?? []).map((f) => [f.path, f.content])),
     status: (detail?.status ?? 'draft') as BuildStatus,
   }
@@ -140,6 +143,7 @@ export function Workspace({ projectId }: { projectId: string }) {
             error={stream.error}
             status={stream.status}
             awaiting={stream.awaiting}
+            streaming={stream.streaming}
             mode={mode}
             model={model}
             onModelChange={setModel}
@@ -148,9 +152,21 @@ export function Workspace({ projectId }: { projectId: string }) {
             onRetry={stream.retry}
           />
         </section>
-        <section className="overflow-hidden bg-zinc-900/40">
-          <PreviewPanel files={files} building={stream.running} projectId={projectId} />
-        </section>
+        {/* 生成中：实时对话流；完成/暂停/待确认：预览 */}
+        {stream.running ? (
+          <section className="overflow-hidden">
+            <GenerationStream
+              streaming={stream.streaming}
+              files={files}
+              progress={stream.progress}
+              stepLabel={stream.stepLabel}
+            />
+          </section>
+        ) : (
+          <section className="overflow-hidden bg-zinc-900/40">
+            <PreviewPanel files={files} building={stream.running} projectId={projectId} />
+          </section>
+        )}
         <section className="overflow-hidden border-l">
           <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'} />
         </section>

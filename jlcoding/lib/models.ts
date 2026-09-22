@@ -12,7 +12,7 @@ export const GO_MODELS: { id: string; label: string }[] = [
   { id: 'hy3', label: 'Hy3' },
 ]
 
-export const DEFAULT_MODEL = 'deepseek-v4-flash'
+export const DEFAULT_MODEL = 'deepseek-v4-pro'
 
 export function isValidModel(id: string | null | undefined): boolean {
   return GO_MODELS.some((m) => m.id === id)

@@ -90,7 +90,7 @@ function getModel(modelId?: string, sessionId?: string) {
 
 // ---------- 阶段 1：业务分析师（独立运行，产出需求理解，等待用户确认） ----------
 
-// 纯文本角色：单轮生成（模块级，两个阶段共用）
+// 纯文本角色：单轮生成，逐 token 流式输出（模块级，两个阶段共用）
 async function askSingle(
   c: RunContext, roleName: string, instructions: string, prompt: string
 ): Promise<string> {
@@ -100,15 +100,18 @@ async function askSingle(
     instructions,
     stopWhen: isStepCount(1),
   })
-  let result
   try {
-    result = await agent.generate({ prompt, abortSignal: c.abortSignal })
+    const result = await agent.stream({ prompt, abortSignal: c.abortSignal })
+    for await (const delta of result.textStream) {
+      c.onEvent({ type: 'agent_delta', agent: roleName, delta })
+    }
+    const text = ((await result.text) ?? '').trim()
+    console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
+    return text
   } catch (e) {
     if (c.abortSignal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw new PausedError()
     throw e
   }
-  console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
-  return (result.text ?? '').trim()
 }
 
 export async function runAnalyze(ctx: RunContext): Promise<string> {
@@ -174,7 +177,7 @@ export async function runContinue(
     }),
   }
 
-  // 工具角色：ToolLoopAgent 工具循环，prepareStep 注入角色指令与工具白名单
+  // 工具角色：ToolLoopAgent 工具循环，prepareStep 注入角色指令与工具白名单；文本逐 token 流式
   const runToolLoop = async (
     roleName: string, instructions: string, prompt: string, activeTools: string[], maxSteps: number
   ): Promise<string> => {
@@ -185,15 +188,19 @@ export async function runContinue(
       stopWhen: isStepCount(maxSteps),
       prepareStep: () => ({ instructions, activeTools }),
     })
-    let result
     try {
-      result = await agent.generate({ prompt, abortSignal })
+      const result = await agent.stream({ prompt, abortSignal })
+      for await (const delta of result.textStream) {
+        onEvent({ type: 'agent_delta', agent: roleName, delta })
+      }
+      const text = ((await result.text) ?? '').trim()
+      const steps = await result.steps
+      console.log(`[jlcoding] ${roleName} 完成（${steps.length} 步），耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
+      return text
     } catch (e) {
       if (abortSignal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw new PausedError()
       throw e
     }
-    console.log(`[jlcoding] ${roleName} 完成（${result.steps.length} 步），耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
-    return (result.text ?? '').trim()
   }
 
   // Step 1 架构设计师（断点跳过）

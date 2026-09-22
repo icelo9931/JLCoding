@@ -1,14 +1,15 @@
 // 三场景冒烟：需求分析确认 → 追加重新分析 → 暂停 → 断点续跑 → 交付
-// 用法：node scripts/smoke2.cjs [baseUrl]
+// 用法：node scripts/smoke2.cjs [baseUrl] [mode: novice|expert]
 async function main() {
   const base = process.argv[2] || 'http://localhost:3000'
+  const mode = process.argv[3] === 'expert' ? 'expert' : 'novice'
   const t0 = Date.now()
   const ts = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`
 
   const project = await (await fetch(`${base}/api/projects`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: '三场景冒烟', mode: 'expert' }),
+    body: JSON.stringify({ name: '三场景冒烟', mode }),
   })).json()
   const id = project.id
   console.log(`[${ts()}] project: ${id} (mode=${project.mode})`)

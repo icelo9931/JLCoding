@@ -14,12 +14,13 @@ const EXAMPLES = [
   '做一个个人主页，展示技能、项目和联系方式',
 ]
 
-export function ChatPanel({ messages, running, error, status, awaiting, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
+export function ChatPanel({ messages, running, error, status, awaiting, streaming, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
   messages: { role: string; content: string; agent?: string | null }[]
   running: boolean
   error: string | null
   status: BuildStatus
   awaiting: string | null
+  streaming: { agent: string; text: string } | null
   mode: string
   model: string
   onModelChange: (m: string) => void
@@ -95,6 +96,25 @@ export function ChatPanel({ messages, running, error, status, awaiting, mode, mo
             </div>
           </div>
         ))}
+
+        {/* 流式输出气泡：模型正在逐字生成 */}
+        {streaming && (
+          <div className="flex gap-2.5">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-[10px] font-bold">
+              <Sparkles className="h-3.5 w-3.5" />
+            </span>
+            <div className="max-w-[85%]">
+              <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-indigo-400">
+                {streaming.agent}
+                <Loader2 className="h-3 w-3 animate-spin" />
+              </div>
+              <div className="inline-block whitespace-pre-wrap rounded-xl rounded-tl-sm border bg-zinc-900 px-3 py-2 text-sm leading-relaxed text-zinc-200">
+                {streaming.text || '…'}
+                <span className="ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 animate-pulse bg-indigo-400" />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 确认卡片：分析结果 + 追加输入 */}
         {showConfirm && (

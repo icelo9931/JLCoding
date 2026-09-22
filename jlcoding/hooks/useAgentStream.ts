@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import type { ServerEvent, LogEntry } from '@/lib/types'
+import { DEFAULT_MODEL } from '@/lib/models'
 
 let logId = 0
 const nextId = () => `log-${++logId}-${Date.now()}`
@@ -30,8 +31,9 @@ export function useAgentStream(projectId: string, initial: {
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [awaiting, setAwaiting] = useState<string | null>(null) // 待确认的分析结果
+  const [streaming, setStreaming] = useState<{ agent: string; text: string } | null>(null) // 正在流式输出的角色
   const lastInputRef = useRef<string | null>(null)
-  const lastModelRef = useRef<string>('deepseek-v4-flash')
+  const lastModelRef = useRef<string>(DEFAULT_MODEL)
   const lastPhaseRef = useRef<Phase>('analyze')
   const abortRef = useRef<AbortController | null>(null)
 
@@ -42,8 +44,17 @@ export function useAgentStream(projectId: string, initial: {
           ...prev,
           { id: nextId(), agent: event.agent, kind: 'text', title: event.message, status: 'running', createdAt: Date.now() },
         ])
+        setStreaming({ agent: event.agent, text: '' })
+        break
+      case 'agent_delta':
+        setStreaming((prev) =>
+          prev && prev.agent === event.agent
+            ? { agent: prev.agent, text: prev.text + event.delta }
+            : { agent: event.agent, text: event.delta }
+        )
         break
       case 'agent_complete':
+        setStreaming(null)
         setLogs((prev) => {
           const next = [...prev]
           for (let i = next.length - 1; i >= 0; i--) {
@@ -200,5 +211,5 @@ export function useAgentStream(projectId: string, initial: {
     }
   }, [analyze, confirmGenerate])
 
-  return { messages, logs, files, progress, stepLabel, status, error, running, awaiting, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
+  return { messages, logs, files, progress, stepLabel, status, error, running, awaiting, streaming, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
 }
