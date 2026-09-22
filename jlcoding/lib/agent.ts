@@ -153,6 +153,34 @@ async function emitUsage(c: RunContext, roleName: string, result: { usage: Promi
   } catch { /* usage 不可用时忽略 */ }
 }
 
+// ---------- writeFile 参数流实时解码 ----------
+
+// 计算流式 JSON 字符串中"已确定安全"的长度（截掉尾部不完整转义：奇数个反斜杠、不完整的 \uXXXX）
+function safeJsonPrefixLen(raw: string): number {
+  let len = raw.length
+  // 尾部奇数个连续反斜杠 → 最后一个转义不完整
+  let backslashes = 0
+  for (let i = len - 1; i >= 0 && raw[i] === '\\'; i--) backslashes++
+  if (backslashes % 2 === 1) len -= 1
+  // 不完整的 \uXXXX
+  const um = raw.slice(0, len).match(/\\u[0-9a-fA-F]{0,3}$/)
+  if (um) len -= um[0].length
+  return len
+}
+
+// JSON 字符串片段反转义（\\n → 换行等）
+function unescapeJson(s: string): string {
+  try {
+    return JSON.parse(`"${s}"`)
+  } catch {
+    return s
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+  }
+}
+
 export async function runAnalyze(ctx: RunContext): Promise<string> {
   if (!hasModel()) return runMockAnalyze(ctx)
   const instructions = `${ROLE_PROMPTS[0]}${ctx.agentHintText ?? ''}${formatFileContext(ctx.fileContext)}`
@@ -235,8 +263,41 @@ export async function runContinue(
     })
     try {
       const result = await agent.stream({ prompt, abortSignal })
-      for await (const delta of result.textStream) {
-        onEvent({ type: 'agent_delta', agent: roleName, delta })
+      // 关键体验：writeFile 的文件内容在工具参数流中逐 token 生成，
+      // 实时解码为代码文本推送（否则大文件生成期间界面数分钟无输出）
+      const writers = new Map<string, { buf: string; emitted: number; header: string | null }>()
+      for await (const part of result.fullStream) {
+        if (part.type === 'text-delta') {
+          onEvent({ type: 'agent_delta', agent: roleName, delta: part.text })
+        } else if (part.type === 'tool-input-start' && part.toolName === 'writeFile') {
+          writers.set(part.id, { buf: '', emitted: 0, header: null })
+        } else if (part.type === 'tool-input-delta' && writers.has(part.id)) {
+          const w = writers.get(part.id)!
+          w.buf += part.delta
+          // 文件头：首次提取到完整 path 时宣告"正在写入 X"
+          if (!w.header) {
+            const pm = w.buf.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,/)
+            if (pm) {
+              w.header = unescapeJson(pm[1])
+              onEvent({ type: 'agent_delta', agent: roleName, delta: `\n\n【正在写入 ${w.header}】\n` })
+            }
+          }
+          // content 字段：推送"已确定安全部分"的新增文本
+          const cm = w.buf.match(/"content"\s*:\s*"/)
+          if (cm && cm.index !== undefined) {
+            const raw = w.buf.slice(cm.index + cm[0].length)
+            const safeLen = safeJsonPrefixLen(raw)
+            if (safeLen > w.emitted) {
+              const chunk = unescapeJson(raw.slice(w.emitted, safeLen))
+              if (chunk) {
+                w.emitted = safeLen
+                onEvent({ type: 'agent_delta', agent: roleName, delta: chunk })
+              }
+            }
+          }
+        } else if (part.type === 'tool-input-end') {
+          writers.delete(part.id)
+        }
       }
       const text = ((await result.text) ?? '').trim()
       const steps = await result.steps
