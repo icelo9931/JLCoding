@@ -41,8 +41,10 @@ export function useAgentStream(projectId: string, initial: {
   const lastPhaseRef = useRef<Phase>('analyze')
   const abortRef = useRef<AbortController | null>(null)
   const fileContextRef = useRef<string | null>(null)
+  const linkContextRef = useRef<string[]>([])
   const agentPromptRef = useRef<string | null>(null)
   const [fileChips, setFileChips] = useState<string[]>([]) // 已附加文件名（展示用）
+  const [linkChips, setLinkChips] = useState<string[]>([]) // 已附加链接（展示用）
 
   const applyEvent = useCallback((event: ServerEvent) => {
     switch (event.type) {
@@ -161,6 +163,7 @@ export function useAgentStream(projectId: string, initial: {
       skills: custom.skills.length ? custom.skills : undefined,
       mcps: custom.mcps.length ? custom.mcps : undefined,
       fileContext: fileContextRef.current ?? undefined,
+      linkContext: linkContextRef.current.length ? linkContextRef.current : undefined,
       agentPrompt: agentPromptRef.current ?? undefined,
     }
 
@@ -244,10 +247,24 @@ export function useAgentStream(projectId: string, initial: {
     setFileChips(chips)
   }, [])
 
+  // 附加链接（Agent 分析时抓取网页文本注入上下文）
+  const addLink = useCallback((url: string) => {
+    const normalized = /^https?:\/\//.test(url) ? url : `https://${url}`
+    if (!linkContextRef.current.includes(normalized)) {
+      linkContextRef.current = [...linkContextRef.current, normalized]
+    }
+    setLinkChips([...linkContextRef.current])
+  }, [])
+
+  const removeLink = useCallback((url: string) => {
+    linkContextRef.current = linkContextRef.current.filter((u) => u !== url)
+    setLinkChips([...linkContextRef.current])
+  }, [])
+
   // 自定义 agent 的主导 prompt（Workspace 依据 project.agent 注入）
   const setAgentPrompt = useCallback((prompt: string | null) => {
     agentPromptRef.current = prompt
   }, [])
 
-  return { messages, logs, files, progress, currentStep, stepLabel, status, error, running, awaiting, streaming, usage, updatedPaths, fileChips, setFileContext, setAgentPrompt, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
+  return { messages, logs, files, progress, currentStep, stepLabel, status, error, running, awaiting, streaming, usage, updatedPaths, fileChips, linkChips, setFileContext, addLink, removeLink, setAgentPrompt, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
 }

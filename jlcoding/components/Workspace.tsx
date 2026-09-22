@@ -217,6 +217,9 @@ export function Workspace({ projectId }: { projectId: string }) {
                 streaming={stream.streaming}
                 usage={stream.usage}
                 fileChips={stream.fileChips}
+                linkChips={stream.linkChips}
+                onAddLink={stream.addLink}
+                onRemoveLink={stream.removeLink}
                 onUpload={onUpload}
                 onRemoveFile={(i) => {
                   const chips = stream.fileChips.filter((_, j) => j !== i)
@@ -253,6 +256,9 @@ export function Workspace({ projectId }: { projectId: string }) {
                 streaming={stream.streaming}
                 usage={stream.usage}
                 fileChips={stream.fileChips}
+                linkChips={stream.linkChips}
+                onAddLink={stream.addLink}
+                onRemoveLink={stream.removeLink}
                 onUpload={onUpload}
                 onRemoveFile={(i) => {
                   const chips = stream.fileChips.filter((_, j) => j !== i)

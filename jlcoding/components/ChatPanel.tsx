@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { GO_MODELS } from '@/lib/models'
 import type { BuildStatus } from '@/hooks/useAgentStream'
-import { Send, RotateCcw, User, Sparkles, Check, ChevronDown, Play, Loader2, ClipboardCheck, RefreshCw, Paperclip, X, FileCode2, Zap } from 'lucide-react'
+import { Send, RotateCcw, User, Sparkles, Check, ChevronDown, Play, Loader2, ClipboardCheck, RefreshCw, Paperclip, X, FileCode2, Zap, Link2, Globe } from 'lucide-react'
 
 const EXAMPLES = [
   '做一个待办事项应用，支持添加、完成、筛选',
@@ -14,7 +14,7 @@ const EXAMPLES = [
   '做一个个人主页，展示技能、项目和联系方式',
 ]
 
-export function ChatPanel({ messages, running, error, status, awaiting, streaming, usage, fileChips, onUpload, onRemoveFile, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
+export function ChatPanel({ messages, running, error, status, awaiting, streaming, usage, fileChips, linkChips, onUpload, onRemoveFile, onAddLink, onRemoveLink, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
   messages: { role: string; content: string; agent?: string | null }[]
   running: boolean
   error: string | null
@@ -23,8 +23,11 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
   streaming: { agent: string; text: string } | null
   usage: { input: number; output: number } | null
   fileChips: string[]
+  linkChips: string[]
   onUpload: (files: FileList) => void
   onRemoveFile: (index: number) => void
+  onAddLink: (url: string) => void
+  onRemoveLink: (url: string) => void
   mode: string
   model: string
   onModelChange: (m: string) => void
@@ -34,6 +37,8 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
 }) {
   const [input, setInput] = useState('')
   const [append, setAppend] = useState('')
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkInput, setLinkInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
   const showConfirm = awaiting !== null && !running
@@ -202,15 +207,38 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
       )}
 
       <div className="border-t p-3">
-        {/* 附件 chips */}
-        {fileChips.length > 0 && (
+        {/* 附件 chips（文件 + 链接） */}
+        {(fileChips.length > 0 || linkChips.length > 0) && (
           <div className="mb-2 flex flex-wrap gap-1.5">
+            {linkChips.map((u) => (
+              <span key={u} className="flex max-w-[220px] items-center gap-1 rounded-full border border-sky-800/60 bg-sky-950/40 px-2.5 py-1 text-[11px] text-sky-300">
+                <Globe className="h-3 w-3 shrink-0" />
+                <span className="truncate">{u.replace(/^https?:\/\//, '')}</span>
+                <button onClick={() => onRemoveLink(u)}><X className="h-3 w-3 hover:text-white" /></button>
+              </span>
+            ))}
             {fileChips.map((c, i) => (
               <span key={i} className="flex items-center gap-1 rounded-full border border-amber-800/60 bg-amber-950/40 px-2.5 py-1 text-[11px] text-amber-300">
                 <FileCode2 className="h-3 w-3" />{c}
                 <button onClick={() => onRemoveFile(i)}><X className="h-3 w-3 hover:text-white" /></button>
               </span>
             ))}
+          </div>
+        )}
+        {/* 链接输入行 */}
+        {linkOpen && (
+          <div className="mb-2 flex gap-2">
+            <input
+              value={linkInput}
+              onChange={(e) => setLinkInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && linkInput.trim()) { onAddLink(linkInput.trim()); setLinkInput(''); setLinkOpen(false) }
+              }}
+              placeholder="粘贴参考网页链接（Agent 将抓取内容作为需求参考）"
+              className="h-8 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-xs outline-none focus:border-indigo-600"
+              autoFocus
+            />
+            <Button size="sm" onClick={() => { if (linkInput.trim()) { onAddLink(linkInput.trim()); setLinkInput('') }; setLinkOpen(false) }}>添加</Button>
           </div>
         )}
         {/* 模型选择 pill + 模式标识 */}
@@ -261,6 +289,19 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-white disabled:opacity-40"
           >
             <Paperclip className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setLinkOpen((v) => !v)}
+            disabled={running || showConfirm}
+            title="添加参考链接（Agent 抓取网页内容作为需求参考）"
+            className={cn(
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-40',
+              linkOpen || linkChips.length > 0
+                ? 'bg-sky-950/60 text-sky-400'
+                : 'text-zinc-500 hover:bg-zinc-800 hover:text-white'
+            )}
+          >
+            <Link2 className="h-4 w-4" />
           </button>
           <input ref={uploadRef} type="file" multiple hidden accept=".txt,.md,.csv,.json,.js,.ts,.html,.xml,.yml,.yaml,.log,image/*" onChange={(e) => { if (e.target.files?.length) onUpload(e.target.files); e.target.value = '' }} />
           <textarea

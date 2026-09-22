@@ -24,7 +24,7 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  const { message, model, phase, agentId, agentPrompt, skills, mcps, fileContext } = await req.json()
+  const { message, model, phase, agentId, agentPrompt, skills, mcps, fileContext, linkContext } = await req.json()
   const projectId = params.id
 
   if (!(await isDbReachable())) {
@@ -66,7 +66,12 @@ export async function POST(
     BUILT_IN_SKILLS.map((s) => s.injection).join('\n') +
     customSkillsInjection((skills ?? []) as CustomSkill[]) +
     mcpInjection((mcps ?? []) as McpConfig[])
-  const fileCtx = typeof fileContext === 'string' ? fileContext : undefined
+  const fileCtx = [
+    typeof fileContext === 'string' ? fileContext : undefined,
+    Array.isArray(linkContext) ? await fetchLinkContext(linkContext) : undefined,
+  ]
+    .filter(Boolean)
+    .join('\n\n') || undefined
 
   await db.project.update({
     where: { id: projectId },
@@ -265,4 +270,34 @@ function sse(stream: ReadableStream): Response {
       Connection: 'keep-alive',
     },
   })
+}
+
+// 链接参考：抓取网页正文（去标签），注入分析上下文（尽力而为，最多 3 条）
+async function fetchLinkContext(urls: string[]): Promise<string | undefined> {
+  const parts: string[] = []
+  for (const url of urls.slice(0, 3)) {
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
+        headers: { 'User-Agent': 'jlcoding/1.0' },
+        redirect: 'follow',
+      })
+      if (!res.ok) {
+        parts.push(`【参考链接：${url}】抓取失败（HTTP ${res.status}），仅记录链接供参考`)
+        continue
+      }
+      const html = await res.text()
+      const text = html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      parts.push(`【参考链接：${url}】\n${text.slice(0, 4000)}`)
+    } catch {
+      parts.push(`【参考链接：${url}】抓取失败（超时或不可达），仅记录链接供参考`)
+    }
+  }
+  return parts.length ? parts.join('\n\n') : undefined
 }
