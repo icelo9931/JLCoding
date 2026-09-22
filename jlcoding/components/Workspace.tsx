@@ -76,14 +76,15 @@ export function Workspace({ projectId }: { projectId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail?.agent])
 
-  // 首页带来的上传文件上下文
+  // 首页带来的上传文件/参考链接上下文
   useEffect(() => {
     const raw = sessionStorage.getItem(`jlcoding:ctx:${projectId}`)
     if (raw) {
       sessionStorage.removeItem(`jlcoding:ctx:${projectId}`)
       try {
-        const { text, chips } = JSON.parse(raw)
+        const { text, chips, links } = JSON.parse(raw)
         if (text) stream.setFileContext(text, chips ?? [])
+        for (const url of links ?? []) stream.addLink(url)
       } catch { /* ignore */ }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

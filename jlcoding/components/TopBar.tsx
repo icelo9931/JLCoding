@@ -10,11 +10,11 @@ import { Download, Rocket, Terminal, ArrowLeft, Pause, Play, Wrench, Loader2 } f
 
 export function BrandMark() {
   return (
-    <span className="flex items-center gap-2.5">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
-        <Terminal className="h-4 w-4" />
+    <span className="flex items-center gap-3">
+      <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600">
+        <Terminal className="h-6 w-6" />
       </span>
-      <span className="text-lg font-bold">jlCoding</span>
+      <span className="text-xl font-bold leading-none">jlCoding</span>
     </span>
   )
 }
@@ -38,7 +38,7 @@ export function TopBar({ projectName, projectId, status, mode, agent, running, g
   const agentBg = agentDef?.bg ?? 'bg-zinc-800'
 
   return (
-    <header className="flex h-14 items-center gap-3 border-b bg-zinc-950 px-4">
+    <header className="flex h-16 items-center gap-3 border-b bg-zinc-950 px-4">
       <Link href="/" className="flex items-center gap-2 text-zinc-400 transition-colors hover:text-white">
         <ArrowLeft className="h-4 w-4" />
       </Link>
