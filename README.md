@@ -61,7 +61,7 @@
 
 ### 默认 Python 的取舍
 
-笔试要求"用户可指定编程语言"。我的取舍：**未指定时默认 Python（tkinter 单文件、仅标准库）**，保证用户本机 `python main.py` 零依赖可跑；React 仅在需求明确指向 Web 时启用（保留 Sandpack 实时预览这个核心卖点）。浏览器无法运行 Python，预览区如实降级为"IDE 配色代码展示 + 下载运行指引"，不做假的预览。
+我的取舍：**未指定时默认 Python（tkinter 单文件、仅标准库）**，保证用户本机 `python main.py` 零依赖可跑；React 仅在需求明确指向 Web 时启用（保留 Sandpack 实时预览这个核心卖点）。浏览器无法运行 Python，预览区如实降级为"IDE 配色代码展示 + 下载运行指引"，不做假的预览。
 
 ### 双数据库策略（含一次真实事故）
 
@@ -136,7 +136,7 @@ npm run dev            # scripts/dev.mjs 自动选 SQLite schema，零外部依�
 - 历史项目从 Neon 迁入本地：`node scripts/migrate-neon.cjs`
 - 部署复现：Render Blueprint（根目录 `render.yaml`，填 3 个 Secret）/ Vercel（`vercel deploy --prod`，环境变量同清单）
 
-## AI 工具使用说明（笔试可选加分项）
+## AI 工具使用说明
 
 本项目开发全程 AI 结对：使用 **OpenCode（Zen + Go 套餐混合，Go $10/月）** 作为主力 coding agent 完成工程实现与调试，**Airship 可视化画布**（选中元素→描述→diff）辅助 UI 迭代；线上生成模型走**性价比优先的 OpenCode Go 套餐**（DeepSeek V4 Pro/Flash），按官方要求携带会话头与自定义 User-Agent。
 
