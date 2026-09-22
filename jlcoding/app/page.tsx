@@ -170,7 +170,7 @@ export default function HomePage() {
             />
           </div>
           <div className="flex min-w-0 flex-1 flex-col">
-            <MainArea />
+            {MainArea()}
           </div>
         </>
       ) : (
@@ -201,7 +201,7 @@ export default function HomePage() {
           <PanelResizeHandle className="w-1.5 bg-zinc-900 transition-colors hover:bg-indigo-600" />
           <Panel defaultSize={80} minSize={50}>
             <div className="flex h-full min-w-0 flex-col">
-              <MainArea />
+              {MainArea()}
             </div>
           </Panel>
         </PanelGroup>
@@ -236,7 +236,7 @@ export default function HomePage() {
             <span className="text-zinc-500">Ship it.</span>
           </h1>
 
-          <HomeInputArea />
+          {HomeInputArea()}
         </main>
       </>
     )
@@ -250,8 +250,8 @@ export default function HomePage() {
             {AGENTS.map((a) => (
               <div key={a.id} className="group relative">
                 <button
-                  onClick={() => setAgentId(a.id)}
-                  title={a.name}
+                  onClick={() => setAgentId((cur) => (cur === a.id ? DEFAULT_AGENT : a.id))}
+                  title={agentId === a.id ? `${a.name}（再点一次取消，回到代码工程师）` : a.name}
                   className={cn(
                     'flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-3 text-xs transition-all',
                     agentId === a.id
@@ -273,7 +273,7 @@ export default function HomePage() {
             {customAgents.map((a) => (
               <button
                 key={a.id}
-                onClick={() => setAgentId(a.id)}
+                onClick={() => setAgentId((cur) => (cur === a.id ? DEFAULT_AGENT : a.id))}
                 className={cn(
                   'flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-3 text-xs transition-all',
                   agentId === a.id ? 'border-indigo-500 bg-indigo-950/60 text-white' : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-600'
