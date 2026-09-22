@@ -5,6 +5,8 @@ import * as Collapsible from '@radix-ui/react-collapsible'
 import { cn } from '@/lib/utils'
 import type { LogEntry } from '@/lib/types'
 import { FileCode2, TerminalSquare, ListTree, ChevronRight, Loader2, CheckCircle2, XCircle, File as FileIcon, Sparkles } from 'lucide-react'
+import { CodeBlock } from '@/components/CodeBlock'
+import { languageOf } from '@/lib/utils'
 
 const AGENT_COLORS: Record<string, string> = {
   业务分析师: 'text-sky-400',
@@ -130,11 +132,9 @@ export function AgentLogPanel({ logs, files, simple, updatedPaths }: {
                 </button>
               ))}
             </div>
-            <div className="flex-1 overflow-auto">
+            <div className="flex-1 overflow-auto p-2">
               {selectedFile ? (
-                <pre className="p-3 text-[11px] leading-relaxed text-zinc-300">
-                  <code>{files[selectedFile]}</code>
-                </pre>
+                <CodeBlock code={files[selectedFile]} language={languageOf(selectedFile) as 'js'} maxHeight="100%" />
               ) : (
                 <Empty text="选择文件查看代码" />
               )}

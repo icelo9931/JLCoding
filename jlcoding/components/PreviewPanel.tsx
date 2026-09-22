@@ -9,6 +9,7 @@ import {
 } from '@codesandbox/sandpack-react'
 import type { SandpackMessage } from '@codesandbox/sandpack-client'
 import { Button } from '@/components/ui/button'
+import { CodeBlock } from '@/components/CodeBlock'
 import { cn } from '@/lib/utils'
 import { Monitor, Tablet, Smartphone, ExternalLink, RotateCw, CheckCircle2, XCircle } from 'lucide-react'
 
@@ -50,8 +51,37 @@ export function PreviewPanel({ files, building, projectId, standalone = false }:
   }, [files])
 
   const fileCount = Object.keys(files).length
+  const paths = Object.keys(files)
+  const isPythonProject = paths.some((p) => p.endsWith('.py')) && !paths.some((p) => /^(index|App)\.(js|jsx)$/.test(p))
+  const mainPy = files[paths.find((p) => p === 'main.py') ?? paths.find((p) => p.endsWith('.py')) ?? ''] ?? null
 
   useEffect(() => { setBuildLog(null) }, [sandpackFiles, refreshKey])
+
+  // Python 项目：无法浏览器预览 → 黑底代码展示 + 运行说明
+  if (isPythonProject && mainPy) {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex items-center gap-2 border-b px-3 py-2 text-xs">
+          <span className="rounded-full bg-yellow-950/60 px-2.5 py-1 font-medium text-yellow-400">Python 应用</span>
+          <span className="text-zinc-500">标准库 tkinter · 无需安装依赖</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto"
+            onClick={() => (window.location.href = `/api/projects/${projectId}/download`)}
+          >
+            下载 ZIP 运行
+          </Button>
+        </div>
+        <div className="flex flex-1 flex-col overflow-hidden p-3">
+          <div className="mb-2 text-[11px] text-zinc-500">运行方式：解压后执行 <code className="rounded bg-zinc-800 px-1.5 py-0.5 text-emerald-400">python main.py</code></div>
+          <div className="flex-1 overflow-auto rounded-lg">
+            <CodeBlock code={mainPy} language="py" maxHeight="100%" />
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (fileCount === 0) {
     return (

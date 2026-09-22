@@ -1,0 +1,12 @@
+
+  ◆ airship  —  editing D:\agent_web\jlcoding with opencode
+  → open http://localhost:3001
+    (proxying your dev server at http://localhost:3000)
+
+  ⚠ Unsandboxed: the agent can write anywhere and reach the network.
+    Pass --safe to confine it to this project.
+
+  Your app opens on a canvas — one live frame per device size.
+  Pick an element and describe a change · ⇧1 fits · space-drag pans.
+  Ctrl-C to stop.
+

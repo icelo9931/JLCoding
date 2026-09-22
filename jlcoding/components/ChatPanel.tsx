@@ -312,7 +312,7 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
             }}
             rows={2}
             disabled={showConfirm}
-            placeholder={hasFiles ? '生成完成后可描述修改需求…' : '描述你想做的应用，例如：做一个待办事项应用…'}
+            placeholder={hasFiles ? '生成完成后可描述修改需求…' : '描述你想做的应用（可指定编程语言，未指定默认 Python）…'}
             className="max-h-32 flex-1 resize-none bg-transparent px-1 text-sm outline-none placeholder:text-zinc-600 disabled:opacity-50"
           />
           <Button size="icon" onClick={submit} disabled={running || !input.trim() || showConfirm}>

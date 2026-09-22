@@ -16,6 +16,7 @@ export interface RunContext {
   fileContext?: string // 用户上传文件内容
   skillsInjection?: string // 技能注入（内置 + 自定义 + MCP 说明）
   incremental?: boolean // 增量修改模式：在现有应用上按 diff 式只改需要改的文件
+  language?: 'react' | 'python' // 生成语言：用户指定或按需求检测，默认 python
 }
 
 // 断点恢复：已完成阶段由调用方（路由层从 Message.step 读取）传入
@@ -42,7 +43,17 @@ const CODE_CONSTRAINTS = `
   3. App.js — 根组件
   4. styles.css — 全局样式（在 index.js 或 App.js 中 import './styles.css'）
 - 可以按需创建更多组件文件（如 TodoItem.js），从 './文件名' 导入。
-- 所有交互状态用 React hooks 管理，确保应用可直接运行且无控制台报错。`
+- 所有交互状态用 React hooks 管理，确保应用可直接运行且无控制台报错。
+- 【变量纪律】需要累加/累减/重新赋值的变量一律用 let 声明；const 声明的变量绝对禁止重新赋值（含 +=、-=、++、--），否则编译直接失败。`
+
+// Python 管线约束（默认语言）：标准库优先、单文件 tkinter GUI
+const PYTHON_CONSTRAINTS = `
+技术约束（Python 应用，必须严格遵守）：
+- 默认生成单文件 main.py（tkinter 图形界面，只用 Python 标准库：tkinter / datetime / json / math / calendar 等，禁止第三方依赖如 pygame / pandas / numpy——用户本机无环境装包）。
+- 若需求明显是纯计算/脚本类（无界面诉求），生成命令行脚本 main.py（input/print 交互）。
+- 结构要求：函数封装逻辑、入口统一为 if __name__ == '__main__':、顶部 docstring 说明用法、关键逻辑写中文注释。
+- 界面要求（tkinter）：合理布局（grid/pack）、标题与提示文案清晰、按钮/输入框可用，窗口尺寸适配内容。
+- 【变量纪律】需要重新赋值的变量不要命名为全大写常量风格；逻辑函数化，避免超长过程式代码。`
 
 const ROLE_PROMPTS: string[] = [
   `你是资深业务分析师。分析用户需求，输出：
@@ -73,15 +84,18 @@ ${CODE_CONSTRAINTS}
 修复完成后用一句话说明修复内容。`,
 ]
 
-// 增量修改模式的工程师 prompt（diff 式最小改动）
-const MODIFY_ENGINEER_PROMPT = `你是资深代码工程师，正在对现有可运行的应用做增量修改。
-${CODE_CONSTRAINTS}
+// 增量修改模式的工程师 prompt（diff 式最小改动，按语言取约束）
+function modifyEngineerPrompt(language: 'react' | 'python'): string {
+  const constraints = language === 'python' ? PYTHON_CONSTRAINTS : CODE_CONSTRAINTS
+  return `你是资深代码工程师，正在对现有可运行的应用做增量修改。
+${constraints}
 
 性能要求（重要）：
 - 优先用 readFile 理解现状，只对需要改动的文件调用 writeFile，一次写入完整内容；
 - 与修改无关的文件一律不动；改动面最小化，保持现有风格；
-- 若修改涉及新功能，可新增组件文件并从现有文件正确导入；
+- 若修改涉及新功能，可新增组件/模块文件并从现有文件正确导入；
 - 完成后用一句话总结改了哪些文件、为什么。不要调用其他工具。`
+}
 
 const ROLE_NAMES = ['业务分析师', '架构设计师', '代码工程师', '测试工程师', '修复工程师']
 
@@ -252,10 +266,13 @@ export async function runContinue(
   if (!completed.engineering) {
     checkPaused()
     const isModify = Boolean(ctx.incremental && ctx.existingFiles?.length)
+    const language = ctx.language ?? 'python'
     onEvent({
       type: 'agent_start',
       agent: ROLE_NAMES[2],
-      message: isModify ? '正在增量修改代码（只改需要改的文件）' : '正在编写代码',
+      message: isModify
+        ? `正在增量修改代码（${language === 'python' ? 'Python' : 'React'}，只改需要改的文件）`
+        : `正在编写 ${language === 'python' ? 'Python（main.py）' : 'React'} 代码`,
     })
     onEvent({ type: 'task_progress', step: 3, total: 5, label: '代码工程师' })
     const fileList = ctx.existingFiles?.map((f) => f.path).join(', ')
@@ -270,9 +287,10 @@ export async function runContinue(
       : ctx.existingFiles?.length
         ? `\n注意：沙箱中已存在以下文件（来自上次中断，内容已持久化）：${fileList}。这些文件视为已完成，除非用户需求未覆盖——只补写缺失的文件，不要重写已有文件。`
         : ''
+    const basePrompt = isModify ? modifyEngineerPrompt(language) : ROLE_PROMPTS[2].replace(CODE_CONSTRAINTS, language === 'python' ? PYTHON_CONSTRAINTS : CODE_CONSTRAINTS)
     const engineerSummary = await runToolLoop(
       ROLE_NAMES[2],
-      `${ctx.incremental ? MODIFY_ENGINEER_PROMPT : ROLE_PROMPTS[2]}${ctx.skillsInjection ?? ''}${engineerExtra}${formatFileContext(ctx.fileContext)}`,
+      `${basePrompt}${ctx.skillsInjection ?? ''}${engineerExtra}${formatFileContext(ctx.fileContext)}`,
       `用户原始需求：${userInput.split('\n【追加】')[0]}
 ${ctx.incremental ? `\n本次修改需求（重点）：${[...userInput.split('\n【追加】')].slice(-1)[0]}` : ''}
 ${design ? `\n架构设计：\n${design}` : ''}`,

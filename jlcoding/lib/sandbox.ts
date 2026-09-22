@@ -46,9 +46,32 @@ export class Sandbox {
     return { stdout: '', stderr: `command not found: ${command}`, exitCode: 1 }
   }
 
-  // 模拟构建校验：静态检查生成的文件集
+  // 模拟构建校验：静态检查生成的文件集（React 与 Python 项目分别适配）
   private validate(): CommandResult {
     const errors: string[] = []
+    const paths = Array.from(this.files.keys())
+    const isPython = paths.some((p) => p.endsWith('.py')) && !paths.some((p) => /^(index|App)\.(js|jsx)$/.test(p) && !p.includes('/'))
+
+    if (isPython) {
+      // Python 项目：入口 main.py + 括号平衡
+      if (!paths.includes('main.py')) {
+        errors.push('error: 缺少入口文件 main.py')
+      }
+      for (const [path, content] of Array.from(this.files.entries())) {
+        if (path.endsWith('.py') && !balancedBraces(content)) {
+          errors.push(`error: ${path} 括号/引号不匹配，可能存在语法错误`)
+        }
+        if (path.endsWith('.py') && !/__main__/.test(content)) {
+          errors.push(`error: ${path} 缺少 if __name__ == '__main__' 入口`)
+        }
+      }
+      if (errors.length > 0) return { stdout: '', stderr: errors.join('\n'), exitCode: 1 }
+      return {
+        stdout: `✓ Python 项目校验通过（${this.files.size} 个文件，括号平衡 / 入口完整 / 无语法硬伤）\n运行方式：python main.py（标准库 tkinter，无需安装依赖）`,
+        stderr: '',
+        exitCode: 0,
+      }
+    }
 
     const pkg = this.files.get('package.json')
     if (!pkg) {
@@ -77,6 +100,11 @@ export class Sandbox {
       }
       if (/\.(js|jsx|ts|tsx)$/.test(path) && !balancedBraces(content)) {
         errors.push(`error: ${path} 括号不匹配，可能存在语法错误`)
+      }
+      if (/\.(js|jsx|ts|tsx)$/.test(path)) {
+        for (const offender of constReassignments(content)) {
+          errors.push(`error: ${path} 对 const 常量 ${offender} 重新赋值（需改为 let 声明），行内位置见代码`)
+        }
       }
     }
 
@@ -115,3 +143,38 @@ function balancedBraces(source: string): boolean {
   }
   return depth === 0 && inString === null
 }
+
+// const 常量重赋值检测（启发式）：const 声明的标识符出现在 += -= *= /= %= ++ -- 或单独 = 左侧
+// 用于拦截如 "const offset = ...; offset -= yearDays" 这类 Sandpack 编译期错误
+function constReassignments(source: string): string[] {
+  const offenders = new Set<string>()
+  // 去掉字符串与注释，避免误报
+  const cleaned = source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/`(?:[^`\\]|\\[\s\S])*`/g, '""')
+    .replace(/"(?:[^"\\]|\\[\s\S])*"/g, '""')
+    .replace(/'(?:[^'\\]|\\[\s\S])*'/g, "''")
+  // 收集 const 声明的标识符
+  const constNames = new Set<string>()
+  const declRe = /\bconst\s+([A-Za-z_$][\w$]*)\s*=/g
+  let declMatch: RegExpExecArray | null
+  while ((declMatch = declRe.exec(cleaned))) {
+    constNames.add(declMatch[1])
+  }
+  // 检查这些标识符是否被重赋值
+  for (const name of Array.from(constNames)) {
+    // 匹配 name++ / name-- / name += x / name -= x / name = x（== 与 === 自然被 [^=] 排除）
+    const re = new RegExp(`(?<![\\w$.])${name}\\s*(\\+\\+|--|[+\\-*/%]?=[^=])`, 'g')
+    let match: RegExpExecArray | null
+    while ((match = re.exec(cleaned))) {
+      const before = cleaned.slice(Math.max(0, match.index - 30), match.index)
+      // 声明行（const name = ...）不算重赋值：before 应以 const 结尾
+      if (/\bconst\s*$/.test(before)) continue
+      offenders.add(name)
+      break
+    }
+  }
+  return Array.from(offenders)
+}
+

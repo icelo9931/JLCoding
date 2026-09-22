@@ -73,6 +73,16 @@ export async function POST(
     .filter(Boolean)
     .join('\n\n') || undefined
 
+  // 编程语言决策：用户指定 > 项目既有文件推断 > 需求关键词 > 默认 Python
+  const text = `${typeof message === 'string' ? message : ''}`
+  const existingPaths = (await db.file.findMany({ where: { projectId }, select: { path: true } })).map((f) => f.path)
+  let language: 'react' | 'python'
+  if (/python|py脚本|\.py/i.test(text)) language = 'python'
+  else if (/react|jsx|javascript|type ?script|网页|网站|web|h5|前端|组件|浏览器/i.test(text)) language = 'react'
+  else if (existingPaths.some((p) => p.endsWith('.py'))) language = 'python'
+  else if (existingPaths.some((p) => /^(package\.json|App\.(js|jsx)|index\.js)$/.test(p))) language = 'react'
+  else language = 'python' // 平台默认：用户不指定编程语言时生成 Python
+
   await db.project.update({
     where: { id: projectId },
     data: { model: modelId, ...(agentId ? { agent: agentId } : {}) },
@@ -112,8 +122,9 @@ export async function POST(
             sandbox,
             sessionId: projectId,
             model: modelId,
-            agentHintText: hintText,
+            agentHintText: hintText + `\n\n实现语言决策：本次将使用 ${language === 'python' ? 'Python（tkinter 单文件）' : 'React（浏览器可预览）'}（用户指定或平台默认 Python）。请在功能清单中写明将采用的语言。`,
             fileContext: fileCtx,
+            language,
             onEvent: send,
           })
 
@@ -201,6 +212,7 @@ export async function POST(
             fileContext: fileCtx,
             skillsInjection: skillText,
             incremental: isModification,
+            language,
             onEvent: async (event) => {
               send(event)
               if (event.type === 'file_created' || event.type === 'file_updated') {
