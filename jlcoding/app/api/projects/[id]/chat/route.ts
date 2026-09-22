@@ -3,6 +3,8 @@ import { Sandbox } from '@/lib/sandbox'
 import { runAnalyze, runContinue, PausedError, type CompletedStages } from '@/lib/agent'
 import { languageOf } from '@/lib/utils'
 import { DEFAULT_MODEL, isValidModel } from '@/lib/models'
+import { agentHint } from '@/lib/agents'
+import { BUILT_IN_SKILLS, customSkillsInjection, mcpInjection, type CustomSkill, type McpConfig } from '@/lib/skills'
 import { isDbReachable, dbErrorText } from '@/lib/db-errors'
 import type { ServerEvent } from '@/lib/types'
 
@@ -21,7 +23,7 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  const { message, model, phase } = await req.json()
+  const { message, model, phase, agentId, agentPrompt, skills, mcps, fileContext } = await req.json()
   const projectId = params.id
 
   if (!(await isDbReachable())) {
@@ -37,7 +39,28 @@ export async function POST(
   }
 
   const modelId = isValidModel(model) ? model : isValidModel(project.model) ? project.model! : DEFAULT_MODEL
-  await db.project.update({ where: { id: projectId }, data: { model: modelId } })
+  // 主导 agent：内置（agentHint 生成视角提示）或自定义（前端传 agentPrompt）
+  const effectiveAgentId = agentId ?? project.agent
+  let hintText = ''
+  if (effectiveAgentId?.startsWith('custom:')) {
+    const customName = effectiveAgentId.replace('custom:', '')
+    if (typeof agentPrompt === 'string' && agentPrompt.trim()) {
+      hintText = `\n\n用户指定自定义 agent「${customName}」作为本项目主导视角：${agentPrompt.trim()}请在各阶段输出中优先体现该视角。`
+    }
+  } else if (effectiveAgentId) {
+    hintText = agentHint(effectiveAgentId)
+  }
+  // 技能注入：内置 TDD（GitHub 注入）+ 用户自定义 skill + MCP 说明
+  const skillText =
+    BUILT_IN_SKILLS.map((s) => s.injection).join('\n') +
+    customSkillsInjection((skills ?? []) as CustomSkill[]) +
+    mcpInjection((mcps ?? []) as McpConfig[])
+  const fileCtx = typeof fileContext === 'string' ? fileContext : undefined
+
+  await db.project.update({
+    where: { id: projectId },
+    data: { model: modelId, ...(agentId ? { agent: agentId } : {}) },
+  })
 
   // ---------- 阶段 1：需求分析（产出理解，等待用户确认/追加） ----------
   if (phase === 'analyze') {
@@ -73,6 +96,8 @@ export async function POST(
             sandbox,
             sessionId: projectId,
             model: modelId,
+            agentHintText: hintText,
+            fileContext: fileCtx,
             onEvent: send,
           })
 
@@ -143,6 +168,9 @@ export async function POST(
             sessionId: projectId,
             model: modelId,
             abortSignal: abortController.signal,
+            agentHintText: hintText,
+            fileContext: fileCtx,
+            skillsInjection: skillText,
             onEvent: async (event) => {
               send(event)
               if (event.type === 'file_created' || event.type === 'file_updated') {

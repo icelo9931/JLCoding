@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ServerEvent, LogEntry } from '@/lib/types'
 import { DEFAULT_MODEL } from '@/lib/models'
+import { loadCustom } from '@/lib/custom-store'
 
 let logId = 0
 const nextId = () => `log-${++logId}-${Date.now()}`
@@ -36,6 +37,9 @@ export function useAgentStream(projectId: string, initial: {
   const lastModelRef = useRef<string>(DEFAULT_MODEL)
   const lastPhaseRef = useRef<Phase>('analyze')
   const abortRef = useRef<AbortController | null>(null)
+  const fileContextRef = useRef<string | null>(null)
+  const agentPromptRef = useRef<string | null>(null)
+  const [fileChips, setFileChips] = useState<string[]>([]) // 已附加文件名（展示用）
 
   const applyEvent = useCallback((event: ServerEvent) => {
     switch (event.type) {
@@ -137,11 +141,20 @@ export function useAgentStream(projectId: string, initial: {
     const ac = new AbortController()
     abortRef.current = ac
 
+    // 自动携带：用户自定义技能 / MCP 配置 / 附加文件内容
+    const custom = loadCustom()
+    const extras = {
+      skills: custom.skills.length ? custom.skills : undefined,
+      mcps: custom.mcps.length ? custom.mcps : undefined,
+      fileContext: fileContextRef.current ?? undefined,
+      agentPrompt: agentPromptRef.current ?? undefined,
+    }
+
     try {
       const response = await fetch(`/api/projects/${projectId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, model }),
+        body: JSON.stringify({ ...body, model, ...extras }),
         signal: ac.signal,
       })
       if (!response.ok || !response.body) {
@@ -211,5 +224,16 @@ export function useAgentStream(projectId: string, initial: {
     }
   }, [analyze, confirmGenerate])
 
-  return { messages, logs, files, progress, stepLabel, status, error, running, awaiting, streaming, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
+  // 附加文件（上传后设置；发送后清空）
+  const setFileContext = useCallback((text: string | null, chips: string[]) => {
+    fileContextRef.current = text
+    setFileChips(chips)
+  }, [])
+
+  // 自定义 agent 的主导 prompt（Workspace 依据 project.agent 注入）
+  const setAgentPrompt = useCallback((prompt: string | null) => {
+    agentPromptRef.current = prompt
+  }, [])
+
+  return { messages, logs, files, progress, stepLabel, status, error, running, awaiting, streaming, fileChips, setFileContext, setAgentPrompt, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
 }

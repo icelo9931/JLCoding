@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { GO_MODELS } from '@/lib/models'
 import type { BuildStatus } from '@/hooks/useAgentStream'
-import { Send, RotateCcw, User, Sparkles, Check, ChevronDown, Play, Loader2, ClipboardCheck, RefreshCw } from 'lucide-react'
+import { Send, RotateCcw, User, Sparkles, Check, ChevronDown, Play, Loader2, ClipboardCheck, RefreshCw, Paperclip, X, FileCode2 } from 'lucide-react'
 
 const EXAMPLES = [
   '做一个待办事项应用，支持添加、完成、筛选',
@@ -14,13 +14,16 @@ const EXAMPLES = [
   '做一个个人主页，展示技能、项目和联系方式',
 ]
 
-export function ChatPanel({ messages, running, error, status, awaiting, streaming, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
+export function ChatPanel({ messages, running, error, status, awaiting, streaming, fileChips, onUpload, onRemoveFile, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
   messages: { role: string; content: string; agent?: string | null }[]
   running: boolean
   error: string | null
   status: BuildStatus
   awaiting: string | null
   streaming: { agent: string; text: string } | null
+  fileChips: string[]
+  onUpload: (files: FileList) => void
+  onRemoveFile: (index: number) => void
   mode: string
   model: string
   onModelChange: (m: string) => void
@@ -31,6 +34,7 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
   const [input, setInput] = useState('')
   const [append, setAppend] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const uploadRef = useRef<HTMLInputElement>(null)
   const showConfirm = awaiting !== null && !running
 
   useEffect(() => {
@@ -197,7 +201,18 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
       )}
 
       <div className="border-t p-3">
-        {/* 模型选择 pill */}
+        {/* 附件 chips */}
+        {fileChips.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {fileChips.map((c, i) => (
+              <span key={i} className="flex items-center gap-1 rounded-full border border-amber-800/60 bg-amber-950/40 px-2.5 py-1 text-[11px] text-amber-300">
+                <FileCode2 className="h-3 w-3" />{c}
+                <button onClick={() => onRemoveFile(i)}><X className="h-3 w-3 hover:text-white" /></button>
+              </span>
+            ))}
+          </div>
+        )}
+        {/* 模型选择 pill + 模式标识 */}
         <div className="mb-2 flex items-center gap-2">
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
@@ -238,6 +253,15 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
         </div>
 
         <div className="flex items-end gap-2 rounded-xl border bg-zinc-900 p-2 focus-within:border-indigo-600">
+          <button
+            onClick={() => uploadRef.current?.click()}
+            disabled={running || showConfirm}
+            title="上传文本/表格等参考文件（随下次请求提供给 Agent）"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-white disabled:opacity-40"
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+          <input ref={uploadRef} type="file" multiple hidden accept=".txt,.md,.csv,.json,.js,.ts,.html,.xml,.yml,.yaml,.log,image/*" onChange={(e) => { if (e.target.files?.length) onUpload(e.target.files); e.target.value = '' }} />
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}

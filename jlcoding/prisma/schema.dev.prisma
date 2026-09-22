@@ -14,6 +14,7 @@ model Project {
   name      String
   status    String    @default("draft")
   mode      String    @default("novice")
+  agent     String?
   model     String?
   messages  Message[]
   files     File[]

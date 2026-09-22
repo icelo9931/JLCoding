@@ -12,6 +12,9 @@ export interface RunContext {
   model?: string
   sessionId?: string // OpenCode Go 网关要求的稳定会话 ID（x-opencode-session）
   abortSignal?: AbortSignal // 暂停：中止信号
+  agentHintText?: string // 主导 agent 视角提示
+  fileContext?: string // 用户上传文件内容
+  skillsInjection?: string // 技能注入（内置 + 自定义 + MCP 说明）
 }
 
 // 断点恢复：已完成阶段由调用方（路由层从 Message.step 读取）传入
@@ -116,8 +119,14 @@ async function askSingle(
 
 export async function runAnalyze(ctx: RunContext): Promise<string> {
   if (!hasModel()) return runMockAnalyze(ctx)
-  const analysis = await askSingle(ctx, ROLE_NAMES[0], ROLE_PROMPTS[0], `用户需求：${ctx.userInput}`)
+  const instructions = `${ROLE_PROMPTS[0]}${ctx.agentHintText ?? ''}${formatFileContext(ctx.fileContext)}`
+  const analysis = await askSingle(ctx, ROLE_NAMES[0], instructions, `用户需求：${ctx.userInput}`)
   return analysis
+}
+
+function formatFileContext(fileContext?: string): string {
+  if (!fileContext) return ''
+  return `\n\n用户上传的参考文件内容（数据分析 agent 视角，提炼其中事实供后续阶段使用）：\n${fileContext.slice(0, 6000)}`
 }
 
 // ---------- 阶段 2：设计 → 编码 → 校验 → 修复（支持断点跳过与暂停） ----------
@@ -209,7 +218,7 @@ export async function runContinue(
     checkPaused()
     onEvent({ type: 'agent_start', agent: ROLE_NAMES[1], message: '正在设计架构' })
     onEvent({ type: 'task_progress', step: 2, total: 5, label: '架构设计师' })
-    design = await askSingle(ctx, ROLE_NAMES[1], ROLE_PROMPTS[1], `用户需求：${userInput}\n\n业务分析师输出：\n${ctx.priorAnalysis}`)
+    design = await askSingle(ctx, ROLE_NAMES[1], `${ROLE_PROMPTS[1]}${ctx.agentHintText ?? ''}${formatFileContext(ctx.fileContext)}`, `用户需求：${userInput}\n\n业务分析师输出：\n${ctx.priorAnalysis}`)
     onEvent({ type: 'agent_complete', agent: ROLE_NAMES[1], result: design })
     // 落库由路由层在 onEvent 中处理（step 由路由写入）
   } else {
@@ -226,7 +235,7 @@ export async function runContinue(
       : ''
     const engineerSummary = await runToolLoop(
       ROLE_NAMES[2],
-      `${ROLE_PROMPTS[2]}${engineerExtra}`,
+      `${ROLE_PROMPTS[2]}${ctx.skillsInjection ?? ''}${engineerExtra}${formatFileContext(ctx.fileContext)}`,
       `用户需求：${userInput}\n\n架构设计：\n${design}`,
       ['writeFile', 'readFile'],
       12

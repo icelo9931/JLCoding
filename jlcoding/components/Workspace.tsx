@@ -9,7 +9,10 @@ import { PreviewPanel } from '@/components/PreviewPanel'
 import { AgentLogPanel } from '@/components/AgentLogPanel'
 import { useAgentStream, type ChatMessage, type BuildStatus } from '@/hooks/useAgentStream'
 import { GenerationStream } from '@/components/GenerationStream'
+import { SkillMcpDialog } from '@/components/SkillMcpDialog'
 import { DEFAULT_MODEL } from '@/lib/models'
+import { loadCustom } from '@/lib/custom-store'
+import { parseFiles } from '@/lib/file-read'
 import type { LogEntry } from '@/lib/types'
 
 interface ProjectDetail {
@@ -17,6 +20,7 @@ interface ProjectDetail {
   name: string
   status: string
   mode: string
+  agent: string | null
   model: string | null
   messages: { role: string; content: string; agent: string | null; step: string | null }[]
   files: { path: string; content: string }[]
@@ -48,10 +52,33 @@ export function Workspace({ projectId }: { projectId: string }) {
 
   const stream = useAgentStream(projectId, initial)
   const [model, setModel] = useState<string>(DEFAULT_MODEL)
+  const [skillsOpen, setSkillsOpen] = useState(false)
 
   useEffect(() => {
     if (detail?.model) setModel(detail.model)
   }, [detail?.model])
+
+  // 自定义 agent：注入其主导 prompt
+  useEffect(() => {
+    if (detail?.agent?.startsWith('custom:')) {
+      const custom = loadCustom().agents.find((a) => a.id === detail.agent)
+      stream.setAgentPrompt(custom?.prompt ?? null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.agent])
+
+  // 首页带来的上传文件上下文
+  useEffect(() => {
+    const raw = sessionStorage.getItem(`jlcoding:ctx:${projectId}`)
+    if (raw) {
+      sessionStorage.removeItem(`jlcoding:ctx:${projectId}`)
+      try {
+        const { text, chips } = JSON.parse(raw)
+        if (text) stream.setFileContext(text, chips ?? [])
+      } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 刷新恢复：待确认状态 → 从库里取最新分析展示确认卡片
   useEffect(() => {
@@ -117,16 +144,24 @@ export function Workspace({ projectId }: { projectId: string }) {
     )
   }
 
+  const onUpload = async (files: FileList) => {
+    const parsed = await parseFiles(files)
+    stream.setFileContext(parsed.text, parsed.chips)
+  }
+
   return (
     <div className="flex h-screen flex-col">
+      <SkillMcpDialog open={skillsOpen} onOpenChange={setSkillsOpen} />
       <TopBar
         projectName={detail?.name ?? '加载中…'}
         projectId={projectId}
         status={detail ? stream.status : 'draft'}
         mode={mode}
+        agent={detail?.agent ?? null}
         running={stream.running}
         onPause={stream.pause}
         onResume={() => stream.confirmGenerate(model)}
+        onOpenSkills={() => setSkillsOpen(true)}
       />
       <ProgressBar
         progress={stream.progress}
@@ -144,7 +179,12 @@ export function Workspace({ projectId }: { projectId: string }) {
             status={stream.status}
             awaiting={stream.awaiting}
             streaming={stream.streaming}
-            mode={mode}
+            fileChips={stream.fileChips}
+            onUpload={onUpload}
+            onRemoveFile={(i) => {
+              const chips = stream.fileChips.filter((_, j) => j !== i)
+              stream.setFileContext(chips.length ? null : null, chips)
+            }}            mode={mode}
             model={model}
             onModelChange={setModel}
             onAnalyze={(content) => stream.analyze(content, model)}

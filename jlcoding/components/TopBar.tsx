@@ -2,7 +2,9 @@
 
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { Download, Rocket, Terminal, ArrowLeft, Pause, Play } from 'lucide-react'
+import { AgentAvatar } from '@/components/AgentAvatars'
+import { AGENTS } from '@/lib/agents'
+import { Download, Rocket, Terminal, ArrowLeft, Pause, Play, Wrench } from 'lucide-react'
 
 export function BrandMark() {
   return (
@@ -15,15 +17,20 @@ export function BrandMark() {
   )
 }
 
-export function TopBar({ projectName, projectId, status, mode, running, onPause, onResume }: {
+export function TopBar({ projectName, projectId, status, mode, agent, running, onPause, onResume, onOpenSkills }: {
   projectName: string
   projectId: string
   status: string
   mode: string
+  agent: string | null
   running: boolean
   onPause: () => void
   onResume: () => void
+  onOpenSkills: () => void
 }) {
+  const agentDef = AGENTS.find((a) => a.id === agent)
+  const agentBg = agentDef?.bg ?? 'bg-zinc-800'
+
   return (
     <header className="flex h-14 items-center gap-3 border-b bg-zinc-950 px-4">
       <Link href="/" className="flex items-center gap-2 text-zinc-400 transition-colors hover:text-white">
@@ -33,8 +40,12 @@ export function TopBar({ projectName, projectId, status, mode, running, onPause,
         <BrandMark />
       </Link>
       <span className="text-zinc-700">/</span>
-      <span className="max-w-[220px] truncate text-sm text-zinc-300">{projectName}</span>
-      <span className={cn2(mode)}>
+      {/* 项目名前的主导 agent 头像 */}
+      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${agentBg}`} title={agentDef ? `${agentDef.name} · ${agentDef.tagline}` : (agent?.startsWith('custom:') ? '自定义 Agent' : '代码工程师')}>
+        <AgentAvatar agentId={agent ?? 'engineer'} size="sm" />
+      </span>
+      <span className="max-w-[200px] truncate text-sm text-zinc-300">{projectName}</span>
+      <span className={mode === 'expert' ? 'rounded-full border border-violet-800 bg-violet-950 px-2.5 py-0.5 text-xs text-violet-300' : 'rounded-full border border-sky-800 bg-sky-950 px-2.5 py-0.5 text-xs text-sky-300'}>
         {mode === 'expert' ? '专家模式' : '小白模式'}
       </span>
       {status === 'ready' && (
@@ -53,6 +64,16 @@ export function TopBar({ projectName, projectId, status, mode, running, onPause,
         <span className="rounded-full border border-red-800 bg-red-950 px-2.5 py-0.5 text-xs text-red-400">出错</span>
       )}
       <div className="ml-auto flex items-center gap-2">
+        {/* 技能 / MCP：专家模式入口，小白模式轻提示 */}
+        {mode === 'expert' ? (
+          <Button variant="outline" size="sm" onClick={onOpenSkills} title="管理自定义 Skill / MCP / Agent">
+            <Wrench className="h-4 w-4" /> 技能 & MCP
+          </Button>
+        ) : (
+          <button onClick={onOpenSkills} className="hidden text-[11px] text-zinc-600 transition-colors hover:text-zinc-400 sm:block" title="进阶能力，感兴趣可以看看">
+            进阶：技能/MCP（专家模式可用）
+          </button>
+        )}
         {running && (
           <Button variant="destructive" size="sm" onClick={onPause} title="暂停生成（已完成阶段保留，稍后可继续）">
             <Pause className="h-4 w-4" /> 暂停
@@ -80,10 +101,4 @@ export function TopBar({ projectName, projectId, status, mode, running, onPause,
       </div>
     </header>
   )
-}
-
-function cn2(mode: string) {
-  return mode === 'expert'
-    ? 'rounded-full border border-violet-800 bg-violet-950 px-2.5 py-0.5 text-xs text-violet-300'
-    : 'rounded-full border border-sky-800 bg-sky-950 px-2.5 py-0.5 text-xs text-sky-300'
 }

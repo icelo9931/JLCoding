@@ -13,6 +13,7 @@ model Project {
   name      String
   status    String    @default("draft") // draft | building | awaiting | paused | ready | error
   mode      String    @default("novice") // novice | expert
+  agent     String? // 主导 agent id
   model     String? // OpenCode Go 模型 ID
   messages  Message[]
   files     File[]
