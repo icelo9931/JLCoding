@@ -1,10 +1,12 @@
 'use client'
 
+import { GithubIcon } from '@/components/icons'
+
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { AgentAvatar } from '@/components/AgentAvatars'
 import { AGENTS } from '@/lib/agents'
-import { Download, Rocket, Terminal, ArrowLeft, Pause, Play, Wrench } from 'lucide-react'
+import { Download, Rocket, Terminal, ArrowLeft, Pause, Play, Wrench, Loader2 } from 'lucide-react'
 
 export function BrandMark() {
   return (
@@ -17,13 +19,17 @@ export function BrandMark() {
   )
 }
 
-export function TopBar({ projectName, projectId, status, mode, agent, running, onPause, onResume, onOpenSkills }: {
+export function TopBar({ projectName, projectId, status, mode, agent, running, githubConnected, pushing, pushUrl, onPush, onPause, onResume, onOpenSkills }: {
   projectName: string
   projectId: string
   status: string
   mode: string
   agent: string | null
   running: boolean
+  githubConnected: boolean
+  pushing: boolean
+  pushUrl: string | null
+  onPush: () => void
   onPause: () => void
   onResume: () => void
   onOpenSkills: () => void
@@ -92,6 +98,24 @@ export function TopBar({ projectName, projectId, status, mode, agent, running, o
         >
           <Download className="h-4 w-4" /> 下载代码
         </Button>
+        {/* 推送到 GitHub（已连接 PAT 且项目就绪） */}
+        {githubConnected && (
+          pushUrl ? (
+            <a
+              href={pushUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="flex h-8 items-center gap-1.5 rounded-md border border-emerald-700 bg-emerald-950/60 px-3 text-xs text-emerald-300 hover:border-emerald-500"
+            >
+              <GithubIcon className="h-3.5 w-3.5" />已推送·查看仓库
+            </a>
+          ) : (
+            <Button variant="outline" size="sm" onClick={onPush} disabled={status !== 'ready' || pushing}>
+              {pushing ? <Loader2 className="h-4 w-4 animate-spin" /> : <GithubIcon className="h-4 w-4" />}
+              {pushing ? '推送中…' : '推送 GitHub'}
+            </Button>
+          )
+        )}
         <Button variant="secondary" size="sm" disabled title="部署功能规划中">
           <Rocket className="h-4 w-4" /> 部署
         </Button>

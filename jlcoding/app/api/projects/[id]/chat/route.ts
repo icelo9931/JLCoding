@@ -6,6 +6,7 @@ import { DEFAULT_MODEL, isValidModel } from '@/lib/models'
 import { agentHint } from '@/lib/agents'
 import { BUILT_IN_SKILLS, customSkillsInjection, mcpInjection, type CustomSkill, type McpConfig } from '@/lib/skills'
 import { isDbReachable, dbErrorText } from '@/lib/db-errors'
+import { getSessionUser } from '@/lib/auth'
 import type { ServerEvent } from '@/lib/types'
 
 export const runtime = 'nodejs'
@@ -36,6 +37,16 @@ export async function POST(
   const project = await db.project.findUnique({ where: { id: projectId } })
   if (!project) {
     return new Response(JSON.stringify({ error: '项目不存在' }), { status: 404 })
+  }
+  // 权限：项目归属人（或无归属的遗留项目）可操作
+  if (project.userId) {
+    const user = await getSessionUser(req)
+    if (!user || user.id !== project.userId) {
+      return new Response(JSON.stringify({ error: '无权操作该项目，请登录归属账号' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
   }
 
   const modelId = isValidModel(model) ? model : isValidModel(project.model) ? project.model! : DEFAULT_MODEL

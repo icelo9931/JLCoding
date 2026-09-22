@@ -13,6 +13,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import { DEFAULT_MODEL } from '@/lib/models'
 import { loadCustom } from '@/lib/custom-store'
 import { parseFiles } from '@/lib/file-read'
+import { loadGithub, pushProjectToGithub, type GithubConnection } from '@/lib/github'
 import type { LogEntry } from '@/lib/types'
 
 interface ProjectDetail {
@@ -53,6 +54,14 @@ export function Workspace({ projectId }: { projectId: string }) {
   const stream = useAgentStream(projectId, initial)
   const [model, setModel] = useState<string>(DEFAULT_MODEL)
   const [skillsOpen, setSkillsOpen] = useState(false)
+  const [github, setGithub] = useState<GithubConnection | null>(null)
+  const [pushing, setPushing] = useState(false)
+  const [pushUrl, setPushUrl] = useState<string | null>(null)
+  const [pushError, setPushError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setGithub(loadGithub())
+  }, [])
 
   useEffect(() => {
     if (detail?.model) setModel(detail.model)
@@ -149,6 +158,20 @@ export function Workspace({ projectId }: { projectId: string }) {
     stream.setFileContext(parsed.text, parsed.chips)
   }
 
+  const onPush = async () => {
+    if (!github || !detail || pushing) return
+    setPushing(true)
+    setPushError(null)
+    try {
+      const url = await pushProjectToGithub(github, detail.name, detail.files.map((f) => ({ path: f.path, content: f.content })))
+      setPushUrl(url)
+    } catch (e) {
+      setPushError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPushing(false)
+    }
+  }
+
   return (
     <div className="flex h-screen flex-col">
       <SkillMcpDialog open={skillsOpen} onOpenChange={setSkillsOpen} />
@@ -159,10 +182,19 @@ export function Workspace({ projectId }: { projectId: string }) {
         mode={mode}
         agent={detail?.agent ?? null}
         running={stream.running}
+        githubConnected={Boolean(github)}
+        pushing={pushing}
+        pushUrl={pushUrl}
+        onPush={onPush}
         onPause={stream.pause}
         onResume={() => stream.confirmGenerate(model)}
         onOpenSkills={() => setSkillsOpen(true)}
       />
+      {pushError && (
+        <div className="border-b border-red-900 bg-red-950/40 px-4 py-1.5 text-center text-xs text-red-300">
+          GitHub 推送失败：{pushError}（请检查 Token 的 repo 权限）
+        </div>
+      )}
       <ProgressBar
         progress={stream.progress}
         currentStep={stream.currentStep}

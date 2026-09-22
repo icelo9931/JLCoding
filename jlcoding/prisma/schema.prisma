@@ -8,6 +8,15 @@ datasource db {
   directUrl = env("DIRECT_DATABASE_URL") // 迁移/建表直连（非池化）
 }
 
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime  @default(now())
+  projects     Project[]
+}
+
 model Project {
   id        String    @id @default(cuid())
   name      String
@@ -15,6 +24,8 @@ model Project {
   mode      String    @default("novice") // novice | expert
   agent     String? // 主导 agent id
   model     String? // OpenCode Go 模型 ID
+  userId    String?
+  user      User?     @relation(fields: [userId], references: [id])
   messages  Message[]
   files     File[]
   createdAt DateTime  @default(now())
