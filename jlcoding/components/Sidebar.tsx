@@ -31,7 +31,7 @@ const STATUS_DOT: Record<string, string> = {
 }
 
 // 首页侧栏：展开态内容（宽度由外层 PanelGroup 拖拽控制）
-export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSkills, onOpenConnect, onLogout, loadingProjects }: {
+export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSkills, onOpenConnect, onLogin, onLogout, loadingProjects }: {
   projects: SidebarProject[]
   user: AuthUser | null
   github: GithubConnection | null
@@ -39,6 +39,7 @@ export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSk
   onOpenProject: (id: string) => void
   onOpenSkills: () => void
   onOpenConnect: () => void
+  onLogin: () => void
   onLogout: () => void
   loadingProjects: boolean
 }) {
@@ -75,7 +76,7 @@ export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSk
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {projects.length === 0 && !loadingProjects && (
-            <p className="px-2 py-3 text-[11px] leading-relaxed text-zinc-600">还没有项目<br />输入一句需求开始第一个</p>
+            <p className="px-2 py-3 text-xs leading-relaxed text-zinc-600">还没有项目<br />输入一句需求开始第一个</p>
           )}
           {projects.map((p) => (
             <button
@@ -142,7 +143,9 @@ export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSk
               </button>
             </>
           ) : (
-            <span className="text-[11px] text-zinc-600">未登录（输入需求时登录）</span>
+            <Button className="h-9 w-full justify-center gap-1.5 text-sm" onClick={onLogin}>
+              登录 / 注册
+            </Button>
           )}
         </div>
       </div>

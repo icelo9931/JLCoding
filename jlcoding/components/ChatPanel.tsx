@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { GO_MODELS } from '@/lib/models'
 import type { BuildStatus } from '@/hooks/useAgentStream'
-import { Send, RotateCcw, User, Sparkles, Check, ChevronDown, Play, Loader2, ClipboardCheck, RefreshCw, Paperclip, X, FileCode2 } from 'lucide-react'
+import { Send, RotateCcw, User, Sparkles, Check, ChevronDown, Play, Loader2, ClipboardCheck, RefreshCw, Paperclip, X, FileCode2, Zap } from 'lucide-react'
 
 const EXAMPLES = [
   '做一个待办事项应用，支持添加、完成、筛选',
@@ -14,13 +14,14 @@ const EXAMPLES = [
   '做一个个人主页，展示技能、项目和联系方式',
 ]
 
-export function ChatPanel({ messages, running, error, status, awaiting, streaming, fileChips, onUpload, onRemoveFile, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
+export function ChatPanel({ messages, running, error, status, awaiting, streaming, usage, fileChips, onUpload, onRemoveFile, mode, model, onModelChange, onAnalyze, onConfirm, onRetry }: {
   messages: { role: string; content: string; agent?: string | null }[]
   running: boolean
   error: string | null
   status: BuildStatus
   awaiting: string | null
   streaming: { agent: string; text: string } | null
+  usage: { input: number; output: number } | null
   fileChips: string[]
   onUpload: (files: FileList) => void
   onRemoveFile: (index: number) => void
@@ -277,7 +278,16 @@ export function ChatPanel({ messages, running, error, status, awaiting, streamin
             <Send className="h-4 w-4" />
           </Button>
         </div>
-        <p className="mt-1.5 px-1 text-[10px] text-zinc-600">Enter 发送 / Shift+Enter 换行 · 生成 React 纯前端应用</p>
+        <div className="mt-1.5 flex items-center gap-2 px-1">
+          <p className="text-[10px] text-zinc-600">Enter 发送 / Shift+Enter 换行 · 生成 React 纯前端应用</p>
+          {/* 右下角：本轮 token 消耗 */}
+          {usage && !running && (
+            <span className="ml-auto flex items-center gap-1 text-[11px] text-zinc-400" title="本轮对话的模型 token 消耗（输入/输出）">
+              <Zap className="h-3 w-3 text-amber-400" />
+              Token：入 {usage.input.toLocaleString()} · 出 {usage.output.toLocaleString()}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )

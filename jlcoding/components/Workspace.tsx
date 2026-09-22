@@ -215,6 +215,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                 status={stream.status}
                 awaiting={stream.awaiting}
                 streaming={stream.streaming}
+                usage={stream.usage}
                 fileChips={stream.fileChips}
                 onUpload={onUpload}
                 onRemoveFile={(i) => {
@@ -233,7 +234,8 @@ export function Workspace({ projectId }: { projectId: string }) {
           <PanelResizeHandle className="w-1.5 bg-zinc-900 transition-colors hover:bg-indigo-600" />
           <Panel defaultSize={28} minSize={16}>
             <section className="h-full overflow-hidden">
-              <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'} />
+              <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'}
+                updatedPaths={stream.updatedPaths} />
             </section>
           </Panel>
         </PanelGroup>
@@ -249,6 +251,7 @@ export function Workspace({ projectId }: { projectId: string }) {
                 status={stream.status}
                 awaiting={stream.awaiting}
                 streaming={stream.streaming}
+                usage={stream.usage}
                 fileChips={stream.fileChips}
                 onUpload={onUpload}
                 onRemoveFile={(i) => {
@@ -273,7 +276,8 @@ export function Workspace({ projectId }: { projectId: string }) {
           <PanelResizeHandle className="w-1.5 bg-zinc-900 transition-colors hover:bg-indigo-600" />
           <Panel defaultSize={24} minSize={14}>
             <section className="h-full overflow-hidden border-l">
-              <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'} />
+              <AgentLogPanel logs={stream.logs} files={files} simple={mode === 'novice'}
+                updatedPaths={stream.updatedPaths} />
             </section>
           </Panel>
         </PanelGroup>

@@ -21,7 +21,7 @@ export function LoginModal({ open, onOpenChange, onSuccess, pendingHint }: {
   onSuccess: (user: AuthUser) => void
   pendingHint?: string
 }) {
-  const [tab, setTab] = useState<'login' | 'register'>('login')
+  const [tab, setTab] = useState<'login' | 'register'>('register') // 首次进入默认注册
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -37,7 +37,15 @@ export function LoginModal({ open, onOpenChange, onSuccess, pendingHint }: {
         body: JSON.stringify(tab === 'register' ? { email, password, name: email.split('@')[0] } : { email, password }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || '操作失败')
+      if (!res.ok) {
+        // 登录时邮箱未注册 → 自动切到注册 Tab；注册时已存在 → 切到登录 Tab（均保留邮箱）
+        if (tab === 'login' && data.notRegistered) {
+          setTab('register')
+        } else if (tab === 'register' && res.status === 409) {
+          setTab('login')
+        }
+        throw new Error(data.error || '操作失败')
+      }
       onSuccess(data)
       onOpenChange(false)
       setEmail('')

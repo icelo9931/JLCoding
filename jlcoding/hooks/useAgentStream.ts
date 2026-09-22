@@ -34,6 +34,8 @@ export function useAgentStream(projectId: string, initial: {
   const [running, setRunning] = useState(false)
   const [awaiting, setAwaiting] = useState<string | null>(null) // 待确认的分析结果
   const [streaming, setStreaming] = useState<{ agent: string; text: string } | null>(null) // 正在流式输出的角色
+  const [usage, setUsage] = useState<{ input: number; output: number } | null>(null) // 本轮 token 消耗
+  const [updatedPaths, setUpdatedPaths] = useState<string[]>([]) // 本轮被修改的文件（diff 式可视化）
   const lastInputRef = useRef<string | null>(null)
   const lastModelRef = useRef<string>(DEFAULT_MODEL)
   const lastPhaseRef = useRef<Phase>('analyze')
@@ -80,6 +82,7 @@ export function useAgentStream(projectId: string, initial: {
       case 'file_created':
       case 'file_updated':
         setFiles((prev) => ({ ...prev, [event.path]: event.content }))
+        if (event.type === 'file_updated') setUpdatedPaths((prev) => (prev.includes(event.path) ? prev : [...prev, event.path]))
         setLogs((prev) => [
           ...prev,
           { id: nextId(), agent: '代码工程师', kind: 'file', title: `${event.type === 'file_created' ? '创建' : '更新'} ${event.path}`, path: event.path, content: event.content, status: 'done', createdAt: Date.now() },
@@ -103,6 +106,12 @@ export function useAgentStream(projectId: string, initial: {
         setProgress(Math.round((event.step / event.total) * 100))
         setCurrentStep(event.step)
         setStepLabel(event.label)
+        break
+      case 'usage':
+        setUsage((prev) => ({
+          input: (prev?.input ?? 0) + event.inputTokens,
+          output: (prev?.output ?? 0) + event.outputTokens,
+        }))
         break
       case 'awaiting_confirmation':
         setAwaiting(event.analysis)
@@ -141,6 +150,8 @@ export function useAgentStream(projectId: string, initial: {
     setError(null)
     setStatus('building')
     if (body.phase === 'continue') setAwaiting(null)
+    setUsage(null) // 每轮重置 token 统计
+    setUpdatedPaths([])
     const ac = new AbortController()
     abortRef.current = ac
 
@@ -238,5 +249,5 @@ export function useAgentStream(projectId: string, initial: {
     agentPromptRef.current = prompt
   }, [])
 
-  return { messages, logs, files, progress, currentStep, stepLabel, status, error, running, awaiting, streaming, fileChips, setFileContext, setAgentPrompt, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
+  return { messages, logs, files, progress, currentStep, stepLabel, status, error, running, awaiting, streaming, usage, updatedPaths, fileChips, setFileContext, setAgentPrompt, analyze, confirmGenerate, pause, retry, setLogs, setStatus, setAwaiting, setMessages }
 }

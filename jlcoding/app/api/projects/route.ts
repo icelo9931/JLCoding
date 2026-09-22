@@ -8,9 +8,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: dbErrorText() }, { status: 503 })
   }
   const user = await getSessionUser(req)
-  // 已登录：只看自己的项目；未登录：空列表（可仍通过分享链接访问具体项目）
+  // 未登录：侧栏为空（分享的项目链接仍可直接访问）；登录后只见自己的项目
+  if (!user) return NextResponse.json([])
   const projects = await db.project.findMany({
-    where: user ? { userId: user.id } : { userId: null },
+    where: { userId: user.id },
     orderBy: { updatedAt: 'desc' },
     include: { _count: { select: { files: true, messages: true } } },
   })

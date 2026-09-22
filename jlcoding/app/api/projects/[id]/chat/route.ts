@@ -151,6 +151,19 @@ export async function POST(
     engineering: messages.some((m) => m.step === 'engineering'),
   }
 
+  // 增量修改检测：已有完整生成，且最新一条 user 消息晚于最后一次生成活动
+  // → 本轮 continue 为"修改需求"，工程师进入 diff 式增量模式（不再跳过编码）
+  const lastUserAt = [...messages].reverse().find((m) => m.role === 'user')?.createdAt
+  const lastGenAt = [...messages]
+    .reverse()
+    .find((m) => m.step === 'engineering' || m.step === 'validation' || m.step === 'fix')?.createdAt
+  const isModification = Boolean(
+    completed.engineering && lastUserAt && lastGenAt && new Date(lastUserAt) > new Date(lastGenAt)
+  )
+  if (isModification) {
+    completed.engineering = false // 修改轮必须重新进入编码（增量模式）
+  }
+
   const existingFiles = await db.file.findMany({ where: { projectId } })
   const sandbox = new Sandbox(Object.fromEntries(existingFiles.map((f) => [f.path, f.content])))
 
@@ -182,6 +195,7 @@ export async function POST(
             agentHintText: hintText,
             fileContext: fileCtx,
             skillsInjection: skillText,
+            incremental: isModification,
             onEvent: async (event) => {
               send(event)
               if (event.type === 'file_created' || event.type === 'file_updated') {

@@ -17,10 +17,11 @@ const AGENT_COLORS: Record<string, string> = {
 
 type Tab = 'logs' | 'files' | 'terminal'
 
-export function AgentLogPanel({ logs, files, simple }: {
+export function AgentLogPanel({ logs, files, simple, updatedPaths }: {
   logs: LogEntry[]
   files: Record<string, string>
   simple: boolean
+  updatedPaths?: string[]
 }) {
   const [tab, setTab] = useState<Tab>('logs')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -123,6 +124,9 @@ export function AgentLogPanel({ logs, files, simple }: {
                 >
                   <FileIcon className="h-3 w-3 shrink-0" />
                   <span className="truncate">{path}</span>
+                  {updatedPaths?.includes(path) && (
+                    <span className="ml-auto shrink-0 rounded bg-amber-950 px-1 py-0.5 text-[9px] text-amber-400">已修改</span>
+                  )}
                 </button>
               ))}
             </div>

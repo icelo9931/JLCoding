@@ -15,6 +15,7 @@ export interface RunContext {
   agentHintText?: string // 主导 agent 视角提示
   fileContext?: string // 用户上传文件内容
   skillsInjection?: string // 技能注入（内置 + 自定义 + MCP 说明）
+  incremental?: boolean // 增量修改模式：在现有应用上按 diff 式只改需要改的文件
 }
 
 // 断点恢复：已完成阶段由调用方（路由层从 Message.step 读取）传入
@@ -72,6 +73,16 @@ ${CODE_CONSTRAINTS}
 修复完成后用一句话说明修复内容。`,
 ]
 
+// 增量修改模式的工程师 prompt（diff 式最小改动）
+const MODIFY_ENGINEER_PROMPT = `你是资深代码工程师，正在对现有可运行的应用做增量修改。
+${CODE_CONSTRAINTS}
+
+性能要求（重要）：
+- 优先用 readFile 理解现状，只对需要改动的文件调用 writeFile，一次写入完整内容；
+- 与修改无关的文件一律不动；改动面最小化，保持现有风格；
+- 若修改涉及新功能，可新增组件文件并从现有文件正确导入；
+- 完成后用一句话总结改了哪些文件、为什么。不要调用其他工具。`
+
 const ROLE_NAMES = ['业务分析师', '架构设计师', '代码工程师', '测试工程师', '修复工程师']
 
 export function hasModel(): boolean {
@@ -109,12 +120,23 @@ async function askSingle(
       c.onEvent({ type: 'agent_delta', agent: roleName, delta })
     }
     const text = ((await result.text) ?? '').trim()
+    emitUsage(c, roleName, result)
     console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
     return text
   } catch (e) {
     if (c.abortSignal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw new PausedError()
     throw e
   }
+}
+
+// usage 采集：token 消耗随事件推送前端
+async function emitUsage(c: RunContext, roleName: string, result: { usage: PromiseLike<{ inputTokens?: number; outputTokens?: number }> }) {
+  try {
+    const usage = await result.usage
+    if (usage && (usage.inputTokens || usage.outputTokens)) {
+      c.onEvent({ type: 'usage', agent: roleName, inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0 })
+    }
+  } catch { /* usage 不可用时忽略 */ }
 }
 
 export async function runAnalyze(ctx: RunContext): Promise<string> {
@@ -204,6 +226,7 @@ export async function runContinue(
       }
       const text = ((await result.text) ?? '').trim()
       const steps = await result.steps
+      emitUsage(ctx, roleName, result)
       console.log(`[jlcoding] ${roleName} 完成（${steps.length} 步），耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
       return text
     } catch (e) {
@@ -225,18 +248,34 @@ export async function runContinue(
     design = '[断点恢复] 架构设计已完成，直接进入编码'
   }
 
-  // Step 2 代码工程师（断点跳过）
+  // Step 2 代码工程师（断点跳过；增量修改模式 = diff 式只改需要的文件）
   if (!completed.engineering) {
     checkPaused()
-    onEvent({ type: 'agent_start', agent: ROLE_NAMES[2], message: '正在编写代码' })
+    const isModify = Boolean(ctx.incremental && ctx.existingFiles?.length)
+    onEvent({
+      type: 'agent_start',
+      agent: ROLE_NAMES[2],
+      message: isModify ? '正在增量修改代码（只改需要改的文件）' : '正在编写代码',
+    })
     onEvent({ type: 'task_progress', step: 3, total: 5, label: '代码工程师' })
-    const engineerExtra = ctx.existingFiles?.length
-      ? `\n注意：沙箱中已存在以下文件（来自上次中断，内容已持久化）：${ctx.existingFiles.map((f) => f.path).join(', ')}。这些文件视为已完成，除非用户需求未覆盖——只补写缺失的文件，不要重写已有文件。`
-      : ''
+    const fileList = ctx.existingFiles?.map((f) => f.path).join(', ')
+    const engineerExtra = isModify
+      ? `
+【增量修改模式】用户在现有可运行的应用上提出了新的修改需求。沙箱中已有完整文件（内容已持久化）：${fileList}
+严格遵守：
+1. 先用 readFile 读取与本次修改相关的文件，理解现有结构；
+2. 只对需要改动的文件调用 writeFile（一次写入改动后的完整文件内容）；
+3. 与本次修改无关的文件绝对不要重写、不要调用 writeFile；
+4. 保持现有命名、结构与风格，最小化改动面。`
+      : ctx.existingFiles?.length
+        ? `\n注意：沙箱中已存在以下文件（来自上次中断，内容已持久化）：${fileList}。这些文件视为已完成，除非用户需求未覆盖——只补写缺失的文件，不要重写已有文件。`
+        : ''
     const engineerSummary = await runToolLoop(
       ROLE_NAMES[2],
-      `${ROLE_PROMPTS[2]}${ctx.skillsInjection ?? ''}${engineerExtra}${formatFileContext(ctx.fileContext)}`,
-      `用户需求：${userInput}\n\n架构设计：\n${design}`,
+      `${ctx.incremental ? MODIFY_ENGINEER_PROMPT : ROLE_PROMPTS[2]}${ctx.skillsInjection ?? ''}${engineerExtra}${formatFileContext(ctx.fileContext)}`,
+      `用户原始需求：${userInput.split('\n【追加】')[0]}
+${ctx.incremental ? `\n本次修改需求（重点）：${[...userInput.split('\n【追加】')].slice(-1)[0]}` : ''}
+${design ? `\n架构设计：\n${design}` : ''}`,
       ['writeFile', 'readFile'],
       12
     )
@@ -272,27 +311,33 @@ export async function runContinue(
     result: testSummary || (passed ? '构建校验：通过 ✓' : '构建校验：发现错误'),
   })
 
-  // Step 4 修复工程师（仅校验失败时进入）
-  if (!passed) {
+  // Step 4 修复工程师（多轮自动修复循环：最多 3 轮，直到校验通过）
+  let fixAttempt = 0
+  const MAX_FIX_ROUNDS = 3
+  while (lastValidation.exitCode !== 0 && fixAttempt < MAX_FIX_ROUNDS) {
     checkPaused()
-    onEvent({ type: 'agent_start', agent: ROLE_NAMES[4], message: '正在修复错误' })
-    onEvent({ type: 'task_progress', step: 5, total: 5, label: '修复工程师' })
+    fixAttempt++
+    onEvent({
+      type: 'agent_start',
+      agent: ROLE_NAMES[4],
+      message: `正在修复错误（第 ${fixAttempt}/${MAX_FIX_ROUNDS} 轮）`,
+    })
+    onEvent({ type: 'task_progress', step: 5, total: 5, label: `修复工程师 · 第 ${fixAttempt} 轮` })
     const fixSummary = await runToolLoop(
       ROLE_NAMES[4],
-      `${ROLE_PROMPTS[4]}\n\n构建错误信息：\n${lastValidation.stderr}`,
+      `${ROLE_PROMPTS[4]}\n\n构建错误信息（修复后必须让校验通过）：\n${lastValidation.stderr}`,
       `用户需求：${userInput}\n\n当前文件：${sandbox.list().map((f) => f.path).join(', ')}`,
       ['writeFile', 'runCommand', 'readFile'],
       8
     )
-    if (lastValidation.exitCode !== 0) {
-      const recheck = await sandbox.run('npm run build')
-      lastValidation = { exitCode: recheck.exitCode, stderr: recheck.stderr }
-      onEvent({ type: 'command_run', command: 'npm run build', stdout: recheck.stdout, stderr: recheck.stderr, exitCode: recheck.exitCode })
-    }
+    // 权威复检（无论模型是否自己跑过）
+    const recheck = await sandbox.run('npm run build')
+    lastValidation = { exitCode: recheck.exitCode, stderr: recheck.stderr }
+    onEvent({ type: 'command_run', command: 'npm run build', stdout: recheck.stdout, stderr: recheck.stderr, exitCode: recheck.exitCode })
     onEvent({
       type: 'agent_complete',
       agent: ROLE_NAMES[4],
-      result: fixSummary || (lastValidation.exitCode === 0 ? '修复完成，校验通过 ✓' : '已完成修复尝试'),
+      result: fixSummary || (lastValidation.exitCode === 0 ? '修复完成，校验通过 ✓' : `第 ${fixAttempt} 轮修复完成，继续验证`),
     })
   }
 
@@ -300,7 +345,7 @@ export async function runContinue(
     onEvent({
       type: 'agent_start',
       agent: '系统',
-      message: `警告：静态校验未完全通过（${lastValidation.stderr.split('\n')[0]}），预览以 Sandpack 实际编译结果为准`,
+      message: `警告：经 ${MAX_FIX_ROUNDS} 轮修复静态校验仍未通过（${lastValidation.stderr.split('\n')[0]}），预览以 Sandpack 实际编译结果为准`,
     })
   }
 }

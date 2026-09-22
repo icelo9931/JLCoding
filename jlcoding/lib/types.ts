@@ -7,6 +7,7 @@ export type ServerEvent =
   | { type: 'command_run'; command: string; stdout: string; stderr: string; exitCode: number }
   | { type: 'preview_ready' }
   | { type: 'task_progress'; step: number; total: number; label: string }
+  | { type: 'usage'; agent: string; inputTokens: number; outputTokens: number }
   | { type: 'awaiting_confirmation'; analysis: string }
   | { type: 'paused' }
   | { type: 'error'; message: string }

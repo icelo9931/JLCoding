@@ -145,21 +145,26 @@ export default function HomePage() {
       <ConnectDialog open={connectOpen} onOpenChange={setConnectOpen} onConnected={setGithub} />
       <SkillMcpDialog open={skillsOpen} onOpenChange={setSkillsOpen} />
 
-      {/* 侧栏：可拖宽（180-420）/可收起 */}
+      {/* 单一分栏布局：侧栏默认 1/5（上限 28%，物理上不可能占满全屏），主区自适应 */}
       {collapsed ? (
-        <div className="w-14 shrink-0 border-r">
-          <SidebarRail
-            onExpand={() => { setCollapsed(false); localStorage.setItem(COLLAPSE_KEY, '0') }}
-            onNew={() => { if (!user) { setLoginOpen(true) } else focusInput() }}
-            onOpenSkills={() => setSkillsOpen(true)}
-            onOpenConnect={() => setConnectOpen(true)}
-            projectCount={projects.length}
-          />
-        </div>
+        <>
+          <div className="w-14 shrink-0 border-r">
+            <SidebarRail
+              onExpand={() => { setCollapsed(false); localStorage.setItem(COLLAPSE_KEY, '0') }}
+              onNew={() => { if (!user) setLoginOpen(true); else focusInput() }}
+              onOpenSkills={() => setSkillsOpen(true)}
+              onOpenConnect={() => setConnectOpen(true)}
+              projectCount={projects.length}
+            />
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <MainArea />
+          </div>
+        </>
       ) : (
-        <PanelGroup direction="horizontal" autoSaveId="jlcoding-sidebar" className="h-full w-[420px] shrink-0 border-r">
-          <Panel defaultSize={57} minSize={43} maxSize={100}>
-            <div className="relative h-full">
+        <PanelGroup direction="horizontal" autoSaveId="jlcoding-home" className="h-full">
+          <Panel defaultSize={20} minSize={14} maxSize={28}>
+            <div className="relative h-full border-r">
               <button
                 onClick={() => { setCollapsed(true); localStorage.setItem(COLLAPSE_KEY, '1') }}
                 title="收起侧栏"
@@ -176,16 +181,26 @@ export default function HomePage() {
                 onOpenProject={(id) => router.push(`/project/${id}`)}
                 onOpenSkills={() => setSkillsOpen(true)}
                 onOpenConnect={() => setConnectOpen(true)}
+                onLogin={() => setLoginOpen(true)}
                 onLogout={logout}
               />
             </div>
           </Panel>
           <PanelResizeHandle className="w-1.5 bg-zinc-900 transition-colors hover:bg-indigo-600" />
+          <Panel defaultSize={80} minSize={50}>
+            <div className="flex h-full min-w-0 flex-col">
+              <MainArea />
+            </div>
+          </Panel>
         </PanelGroup>
       )}
+    </div>
+  )
 
-      {/* 主区：极简，atoms 式 */}
-      <div className="flex min-w-0 flex-1 flex-col">
+  // 主区（header + hero + 输入区），抽为内联组件避免两份拷贝
+  function MainArea() {
+    return (
+      <>
         <header className="flex h-14 shrink-0 items-center px-5">
           <BrandMark />
           <span className="ml-3 hidden text-xs text-zinc-500 sm:block">把 idea 变成可运行的代码</span>
@@ -209,6 +224,15 @@ export default function HomePage() {
             <span className="text-zinc-500">Ship it.</span>
           </h1>
 
+          <HomeInputArea />
+        </main>
+      </>
+    )
+  }
+
+  function HomeInputArea() {
+    return (
+      <>
           {/* Agent 头像行 */}
           <div className="mt-8 mb-3 flex flex-wrap items-center gap-1.5">
             {AGENTS.map((a) => (
@@ -277,7 +301,7 @@ export default function HomePage() {
               className="w-full resize-none bg-transparent px-1 text-base leading-relaxed outline-none placeholder:text-zinc-600"
             />
             <div className="mt-3 flex items-center gap-2 border-t border-zinc-800/70 pt-3">
-              <span className="hidden text-[11px] text-zinc-600 sm:inline">Enter 发送 · 生成 React 应用</span>
+              <span className="hidden text-xs text-zinc-500 sm:inline">Enter 发送 · 生成 React 应用</span>
               <div className="ml-auto flex items-center gap-1.5">
                 {/* 模式 */}
                 <div className="group relative">
@@ -355,8 +379,7 @@ export default function HomePage() {
               </button>
             ))}
           </div>
-        </main>
-      </div>
-    </div>
-  )
+      </>
+    )
+  }
 }
