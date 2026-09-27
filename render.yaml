@@ -5,7 +5,10 @@ services:
     plan: free
     region: singapore
     rootDir: jlcoding
-    buildCommand: npm install && npx prisma generate && npm run build
+    buildCommand: npm install && npx prisma generate && node scripts/build-info.mjs && npm run build
+    # Pre-Deploy 执行 schema 同步（幂等）：ProjectVersion/Deploy 等新表自动建到 Neon，
+    # 与构建产物解耦，避免把 db push 混入 buildCommand
+    preDeployCommand: npx prisma db push --schema prisma/schema.prisma --skip-generate
     startCommand: npm run start
     envVars:
       - key: NODE_VERSION
@@ -17,4 +20,4 @@ services:
       - key: OPENCODE_API_KEY
         sync: false
       - key: OPENCODE_BASE_URL
-        value: https://opencode.ai/zen/go/v1
+        value: https://opencode.ai/zen/v1

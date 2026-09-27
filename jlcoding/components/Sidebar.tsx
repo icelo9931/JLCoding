@@ -2,6 +2,7 @@
 
 import { GithubIcon } from '@/components/icons'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { AgentAvatar } from '@/components/AgentAvatars'
@@ -10,7 +11,7 @@ import { loadCustom } from '@/lib/custom-store'
 import { loadGithub, type GithubConnection } from '@/lib/github'
 import type { AuthUser } from '@/components/LoginModal'
 import { cn } from '@/lib/utils'
-import { Plus, FolderOpen, Wrench, Bot, Plug, LogOut, PanelLeftClose, PanelLeftOpen, Loader2 } from 'lucide-react'
+import { Plus, FolderOpen, Wrench, Bot, Plug, LogOut, PanelLeftClose, PanelLeftOpen, Loader2, Trash2, Compass } from 'lucide-react'
 
 export interface SidebarProject {
   id: string
@@ -31,7 +32,7 @@ const STATUS_DOT: Record<string, string> = {
 }
 
 // 首页侧栏：展开态内容（宽度由外层 PanelGroup 拖拽控制）
-export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSkills, onOpenConnect, onLogin, onLogout, loadingProjects }: {
+export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSkills, onOpenConnect, onLogin, onLogout, onDeleted, loadingProjects }: {
   projects: SidebarProject[]
   user: AuthUser | null
   github: GithubConnection | null
@@ -41,12 +42,15 @@ export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSk
   onOpenConnect: () => void
   onLogin: () => void
   onLogout: () => void
+  onDeleted: (id: string) => void
   loadingProjects: boolean
 }) {
   const [skillsCount, setSkillsCount] = useState(0)
   const [mcpsCount, setMcpsCount] = useState(0)
   const [agentsCount, setAgentsCount] = useState(0)
   const [githubState, setGithubState] = useState<GithubConnection | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null) // 内联二次确认：点击一次进入待确认，再点生效
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     const c = loadCustom()
@@ -55,6 +59,30 @@ export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSk
     setAgentsCount(c.agents.length)
     setGithubState(loadGithub())
   }, [])
+
+  // 内联二次确认：3s 未确认自动还原，防误删
+  useEffect(() => {
+    if (!confirmId) return
+    const t = setTimeout(() => setConfirmId(null), 3000)
+    return () => clearTimeout(t)
+  }, [confirmId])
+
+  const del = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation()
+    if (confirmId !== id) { setConfirmId(id); return } // 第一次点击 → 进入待确认
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' })
+      if (res.ok) onDeleted(id)
+      else {
+        const b = await res.json().catch(() => ({}))
+        alert(b.error || `删除失败（${res.status}）`)
+      }
+    } finally {
+      setDeletingId(null)
+      setConfirmId(null)
+    }
+  }
 
   return (
     <div className="flex h-full flex-col bg-zinc-950">
@@ -66,6 +94,13 @@ export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSk
         <Button className="h-9 w-full justify-start gap-2" size="sm" onClick={onNew}>
           <Plus className="h-4 w-4" /> 新建项目
         </Button>
+        <Link
+          href="/discover"
+          className="mt-1.5 flex h-9 w-full items-center gap-2 rounded-md border border-zinc-800 px-3 text-xs text-zinc-400 transition-colors hover:border-indigo-700 hover:text-white"
+          title="发现：浏览大家发布的优秀项目（含完整对话与版本，可看源码/预览/下载）"
+        >
+          <Compass className="h-4 w-4 text-indigo-400" /> 发现（社区精选）
+        </Link>
       </div>
 
       {/* 我的项目 */}
@@ -79,17 +114,41 @@ export function Sidebar({ projects, user, github, onNew, onOpenProject, onOpenSk
             <p className="px-2 py-3 text-xs leading-relaxed text-zinc-600">还没有项目<br />输入一句需求开始第一个</p>
           )}
           {projects.map((p) => (
-            <button
+            <div
               key={p.id}
-              onClick={() => onOpenProject(p.id)}
-              className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-zinc-900"
+              className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-zinc-900"
             >
-              <span className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-md', AGENTS.find((a) => a.id === p.agent)?.bg ?? 'bg-zinc-800')}>
-                <AgentAvatar agentId={p.agent ?? 'engineer'} size="sm" />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-xs text-zinc-300 group-hover:text-white">{p.name}</span>
-              <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[p.status] ?? STATUS_DOT.draft)} />
-            </button>
+              <button
+                onClick={() => onOpenProject(p.id)}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              >
+                <span className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-md', AGENTS.find((a) => a.id === p.agent)?.bg ?? 'bg-zinc-800')}>
+                  <AgentAvatar agentId={p.agent ?? 'engineer'} size="sm" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xs text-zinc-300 group-hover:text-white">{p.name}</span>
+                {confirmId !== p.id && <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[p.status] ?? STATUS_DOT.draft)} />}
+              </button>
+              {/* 删除：hover 出现；内联二次确认（第一次点击变「确认删除？」，再点生效，3s 还原） */}
+              {deletingId === p.id ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-red-400" />
+              ) : confirmId === p.id ? (
+                <button
+                  onClick={(e) => del(e, p.id)}
+                  className="shrink-0 rounded bg-red-950 px-1.5 py-0.5 text-[10px] text-red-300 transition-colors hover:bg-red-900 hover:text-red-100"
+                  title="再次点击确认删除（含对话/文件/版本/部署记录，不可恢复）"
+                >
+                  确认删除？
+                </button>
+              ) : (
+                <button
+                  onClick={(e) => del(e, p.id)}
+                  title="删除项目"
+                  className="hidden shrink-0 rounded p-1 text-zinc-600 transition-colors hover:text-red-400 group-hover:block"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       </div>

@@ -15,7 +15,7 @@ async function main() {
       'x-opencode-session': 'jlcoding-smoke-test',
     },
     body: JSON.stringify({
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-v4.1-flash',
       messages: [{ role: 'user', content: '回复两个字：可用' }],
       max_tokens: 10,
     }),

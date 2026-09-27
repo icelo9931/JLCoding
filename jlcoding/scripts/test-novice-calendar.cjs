@@ -39,13 +39,13 @@ async function main() {
   }
 
   // 1. 分析（等待确认）
-  let ev = await chat({ message: demand, phase: 'analyze', model: 'deepseek-v4-flash' })
+  let ev = await chat({ message: demand, phase: 'analyze', model: 'deepseek-v4.1-flash' })
   const awaited = ev.find((e) => e.type === 'awaiting_confirmation')
   console.log(`${ts()} 分析完成: ${awaited ? '等待确认 ✓' : 'FAIL ✗'}（${awaited?.analysis?.length ?? 0} 字）`)
   if (!awaited) process.exit(1)
 
   // 2. 确认 → 全程生成
-  ev = await chat({ phase: 'continue', model: 'deepseek-v4-flash' })
+  ev = await chat({ phase: 'continue', model: 'deepseek-v4.1-flash' })
   const complete = ev.find((e) => e.type === 'complete')
   const files = ev.filter((e) => e.type === 'file_created')
   const cmd = ev.filter((e) => e.type === 'command_run')

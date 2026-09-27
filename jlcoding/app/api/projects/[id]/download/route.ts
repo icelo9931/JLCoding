@@ -1,31 +1,21 @@
 import JSZip from 'jszip'
 import { db } from '@/lib/db'
-import { isDbReachable, dbErrorText } from '@/lib/db-errors'
+import { requireProjectAccess } from '@/lib/access'
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } }
 ) {
-  if (!(await isDbReachable())) {
-    return new Response(JSON.stringify({ error: dbErrorText() }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }
-  const project = await db.project.findUnique({
-    where: { id: params.id },
-    include: { files: true },
-  })
-  if (!project) {
-    return new Response(JSON.stringify({ error: '项目不存在' }), { status: 404 })
-  }
+  const access = await requireProjectAccess(req, params.id, { allowPublishedRead: true })
+  if (!access.ok) return access.response
 
+  const files = await db.file.findMany({ where: { projectId: params.id } })
   const zip = new JSZip()
-  for (const file of project.files) {
+  for (const file of files) {
     zip.file(file.path, file.content)
   }
   const buffer = await zip.generateAsync({ type: 'nodebuffer' })
-  const filename = encodeURIComponent(project.name || 'jlcoding-project')
+  const filename = encodeURIComponent(access.project.name || 'jlcoding-project')
 
   return new Response(new Uint8Array(buffer), {
     headers: {

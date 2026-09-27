@@ -2,8 +2,10 @@ import { ToolLoopAgent, tool, isStepCount, type ToolSet } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { z } from 'zod'
 import { Sandbox } from './sandbox'
+import { webSearch, readUrlText } from './web-tools'
+import { ruleIntent, type Intent } from './intent-rules'
 import type { ServerEvent } from './types'
-import { DEFAULT_MODEL, isValidModel } from './models'
+import { DEFAULT_MODEL, isValidModel, CLASSIFY_MODEL, CHAT_MODEL, modelEndpoint } from './models'
 
 export interface RunContext {
   userInput: string
@@ -16,7 +18,15 @@ export interface RunContext {
   fileContext?: string // 用户上传文件内容
   skillsInjection?: string // 技能注入（内置 + 自定义 + MCP 说明）
   incremental?: boolean // 增量修改模式：在现有应用上按 diff 式只改需要改的文件
-  language?: 'react' | 'python' // 生成语言：用户指定或按需求检测，默认 python
+  language?: 'react' | 'python' // 生成语言：用户指定或按需求检测，默认 react（可预览、可线上使用）
+  byok?: ByokConfig // BYOK：用户自己的 API Key（OpenAI 兼容端点，仅当次请求使用，不落库）
+}
+
+// 用户自有 API Key（Bring Your Own Key）：OpenAI 兼容网关
+export interface ByokConfig {
+  baseUrl: string
+  apiKey: string
+  model: string
 }
 
 // 断点恢复：已完成阶段由调用方（路由层从 Message.step 读取）传入
@@ -30,6 +40,58 @@ export class PausedError extends Error {
   constructor() {
     super('PAUSED')
     this.name = 'PausedError'
+  }
+}
+
+// 超时保护（空闲看门狗 + 管线总闸）：
+// - 看门狗：IDLE_TIMEOUT_MS 内无任何流式输出 → 判定死连接（网络中断/模型挂起）→ 中止并报错；
+//   每收到一个流式分片即重置计时器 —— 健康的长生成（大应用逐 token 写入 300s+）永不误伤。
+// - 管线总闸：PIPELINE_DEADLINE_MS 为整条管线（设计→编码→校验→修复）的时间上限，
+//   超时 → error 事件 → status=error 落库，已完成阶段保留可断点续跑。
+const IDLE_TIMEOUT_MS = 120_000
+// 实测慢网络下大应用（阴阳历）单工程师阶段可达 ~480s，600s 预算会切断修复轮 → 放宽到 900s；
+// 超时后已完成阶段保留（DB 落库），用户点「继续生成」从断点续跑，不丢工作
+const PIPELINE_DEADLINE_MS = 900_000
+
+interface RunGuard {
+  signal: AbortSignal
+  bump: (chunk?: unknown) => void
+  stop: () => void
+  classify: (e: unknown) => Error
+}
+
+// 创建流式运行守卫：用户暂停信号 + 空闲看门狗 +（可选）管线截止信号三合一，触发后可区分归类
+function createRunGuard(userSignal?: AbortSignal, deadlineAt?: number): RunGuard {
+  const controller = new AbortController()
+  let idle = false
+  let timedOut = false
+  const fireIdle = () => { idle = true; controller.abort() }
+  let idleTimer = setTimeout(fireIdle, IDLE_TIMEOUT_MS)
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null
+  if (deadlineAt !== undefined) {
+    deadlineTimer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(0, deadlineAt - Date.now()))
+  }
+  const signals: AbortSignal[] = [controller.signal]
+  if (userSignal) signals.push(userSignal)
+  return {
+    signal: AbortSignal.any(signals),
+    bump: (chunk?: unknown) => {
+      void chunk // 分片到达本身即视为活跃连接（chunk 内容无需使用）
+      if (controller.signal.aborted) return
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(fireIdle, IDLE_TIMEOUT_MS)
+    },
+    stop: () => { clearTimeout(idleTimer); if (deadlineTimer) clearTimeout(deadlineTimer) },
+    classify: (e: unknown): Error => {
+      if (userSignal?.aborted) return new PausedError()
+      if (idle) {
+        return new Error(`模型连接空闲超时（${IDLE_TIMEOUT_MS / 1000} 秒无任何输出），已完成阶段已保存，可重试或继续生成`)
+      }
+      if (timedOut) {
+        return new Error(`生成超时（整条管线 ${PIPELINE_DEADLINE_MS / 1000} 秒上限），已完成阶段已保存，可点击继续生成从断点续跑`)
+      }
+      return e instanceof Error ? e : new Error(String(e))
+    },
   }
 }
 
@@ -100,51 +162,118 @@ ${constraints}
 const ROLE_NAMES = ['业务分析师', '架构设计师', '代码工程师', '测试工程师', '修复工程师']
 
 export function hasModel(): boolean {
+  // JLCODING_MOCK=1：显式演示模式开关（本地复现「无 Key」行为——PowerShell 空字符串 env 等于删除变量，
+  // 无法用 OPENCODE_API_KEY='' 覆盖 .env，故提供显式开关）
+  if (process.env.JLCODING_MOCK === '1') return false
   return Boolean(process.env.OPENCODE_API_KEY)
 }
 
-function getModel(modelId?: string, sessionId?: string) {
+function getModel(modelId?: string, sessionId?: string, byok?: ByokConfig) {
+  // BYOK：用户自有 API Key 的 OpenAI 兼容端点（仅当次请求使用，不落库、不打日志）
+  if (byok) {
+    const own = createOpenAICompatible({
+      name: 'byok',
+      baseURL: byok.baseUrl,
+      apiKey: byok.apiKey,
+      headers: { 'User-Agent': 'jlcoding/1.0' },
+    })
+    return own(byok.model)
+  }
+  // 按模型所属池选择端点（实测差异：v4.1-flash/glm-5.3 走 zen/v1；v4-pro 走 go 池，
+  // 在 zen/v1 会 404——真实踩坑致「业务分析师 No output generated」）
+  const id = isValidModel(modelId) ? modelId! : DEFAULT_MODEL
+  const endpoint = modelEndpoint(id)
+  const baseURL = endpoint === 'go'
+    ? (process.env.OPENCODE_GO_BASE_URL || 'https://opencode.ai/zen/go/v1')
+    : (process.env.OPENCODE_BASE_URL || 'https://opencode.ai/zen/v1')
   const opencode = createOpenAICompatible({
     name: 'opencode',
-    baseURL: process.env.OPENCODE_BASE_URL || 'https://opencode.ai/zen/go/v1',
+    baseURL,
     apiKey: process.env.OPENCODE_API_KEY,
     headers: {
       'User-Agent': 'jlcoding/1.0',
       ...(sessionId ? { 'x-opencode-session': sessionId } : {}),
     },
   })
-  return opencode(isValidModel(modelId) ? modelId! : DEFAULT_MODEL)
+  return opencode(id)
+}
+
+// 流内错误转明确文案：把 AI SDK 吞掉的 error part（404/429/403）还原成可操作提示，
+// 而不是模糊的「No output generated. Check the stream for errors.」
+function describeStreamError(e: unknown, modelId?: string): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  const status = (e as { statusCode?: number })?.statusCode
+    ?? (e as { data?: { statusCode?: number } })?.data?.statusCode
+    ?? (e as { cause?: { statusCode?: number } })?.cause?.statusCode
+  if (status === 404) return `模型「${modelId ?? '默认'}」在当前端点不可用（404）——请在模型下拉切换其他模型`
+  if (status === 429) {
+    return /GoUsageLimit/i.test(msg)
+      ? 'OpenCode Go 额度已用尽（429）——可切换 GLM 5.3 / DeepSeek V4 Flash，或在模型下拉配置 BYOK 自有 Key'
+      : '请求频率受限（429）——请稍后重试'
+  }
+  if (status === 403) return `模型不可用（403）：${msg.slice(0, 140)}（免费层模型不支持外部 API 调用，请改选付费模型或 BYOK）`
+  return msg
 }
 
 // ---------- 阶段 1：业务分析师（独立运行，产出需求理解，等待用户确认） ----------
 
 // 纯文本角色：单轮生成，逐 token 流式输出（模块级，两个阶段共用）
+// 迭代 fullStream：既取 text-delta 流式推送，也捕获 error part（不再吞成「No output generated」）；
+// 空文本无错误时自动重试一次（网络瞬断兜底）
 async function askSingle(
-  c: RunContext, roleName: string, instructions: string, prompt: string
+  c: RunContext, roleName: string, instructions: string, prompt: string, deadlineAt?: number
 ): Promise<string> {
   const started = Date.now()
+  const modelId = c.byok ? `byok:${c.byok.model}` : (c.model ?? DEFAULT_MODEL)
   const agent = new ToolLoopAgent({
-    model: getModel(c.model, c.sessionId),
+    model: getModel(c.model, c.sessionId, c.byok),
     instructions,
     stopWhen: isStepCount(1),
   })
+  const guard = createRunGuard(c.abortSignal, deadlineAt)
+  let lastStreamError: unknown = null
   try {
-    const result = await agent.stream({ prompt, abortSignal: c.abortSignal })
-    for await (const delta of result.textStream) {
-      c.onEvent({ type: 'agent_delta', agent: roleName, delta })
+    let text = ''
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      let streamError: unknown = null
+      let gotText = false
+      const result = await agent.stream({ prompt, abortSignal: guard.signal })
+      for await (const part of result.fullStream) {
+        guard.bump(part)
+        if (part.type === 'text-delta') {
+          gotText = true
+          c.onEvent({ type: 'agent_delta', agent: roleName, delta: part.text })
+        } else if (part.type === 'error') {
+          streamError = (part as { error?: unknown }).error
+        }
+      }
+      lastStreamError = streamError
+      if (streamError) {
+        // 流内错误 → 直接还原明确文案（确定性错误不重试）
+        throw new Error(describeStreamError(streamError, modelId))
+      }
+      text = ((await result.text) ?? '').trim()
+      emitUsage(c, roleName, result)
+      if (text) break
+      if (gotText) break // 有输出但被 trim 为空（极罕见），不重试
+      if (attempt === 1) console.log(`[jlcoding] ${roleName} 空输出，重试一次（可能是瞬断）`)
     }
-    const text = ((await result.text) ?? '').trim()
-    emitUsage(c, roleName, result)
-    console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
+    if (!text) throw new Error(`模型「${modelId}」未返回任何输出（已重试一次）——请切换模型或稍后再试`)
+    console.log(`[jlcoding] ${roleName} 完成，耗时 ${((Date.now() - started) / 1000).toFixed(1)}s model=${modelId}`)
     return text
   } catch (e) {
-    if (c.abortSignal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw new PausedError()
-    throw e
+    if (e instanceof PausedError) throw e
+    if (lastStreamError && /No output generated/i.test(e instanceof Error ? e.message : '')) {
+      throw new Error(describeStreamError(lastStreamError, modelId))
+    }
+    throw guard.classify(e)
+  } finally {
+    guard.stop()
   }
 }
 
-// usage 采集：token 消耗随事件推送前端
-async function emitUsage(c: RunContext, roleName: string, result: { usage: PromiseLike<{ inputTokens?: number; outputTokens?: number }> }) {
+// usage 采集：token 消耗随事件推送前端（生成管线与 QA 直答共用）
+async function emitUsage(c: { onEvent: (event: ServerEvent) => void }, roleName: string, result: { usage: PromiseLike<{ inputTokens?: number; outputTokens?: number }> }) {
   try {
     const usage = await result.usage
     if (usage && (usage.inputTokens || usage.outputTokens)) {
@@ -182,7 +311,8 @@ function unescapeJson(s: string): string {
 }
 
 export async function runAnalyze(ctx: RunContext): Promise<string> {
-  if (!hasModel()) return runMockAnalyze(ctx)
+  // mock 兜底：平台无 Key 且用户未提供 BYOK 时走预置演示数据
+  if (!hasModel() && !ctx.byok) return runMockAnalyze(ctx)
   const instructions = `${ROLE_PROMPTS[0]}${ctx.agentHintText ?? ''}${formatFileContext(ctx.fileContext)}`
   const analysis = await askSingle(ctx, ROLE_NAMES[0], instructions, `用户需求：${ctx.userInput}`)
   return analysis
@@ -199,13 +329,18 @@ export async function runContinue(
   ctx: RunContext & { priorAnalysis: string; existingFiles?: { path: string; content: string }[] },
   completed: CompletedStages
 ): Promise<void> {
-  if (!hasModel()) {
+  // mock 兜底：平台无 Key 且用户未提供 BYOK 时走预置演示数据
+  if (!hasModel() && !ctx.byok) {
     await runMockContinue(ctx, completed)
     return
   }
-  const { userInput, sandbox, onEvent, model, sessionId, abortSignal } = ctx
+  const { userInput, sandbox, onEvent, model, sessionId, abortSignal, byok } = ctx
+  const deadline = Date.now() + PIPELINE_DEADLINE_MS
   const checkPaused = () => {
     if (abortSignal?.aborted) throw new PausedError()
+    if (Date.now() > deadline) {
+      throw new Error(`生成超时（整条管线 ${PIPELINE_DEADLINE_MS / 1000} 秒上限），已完成阶段已保存，可点击继续生成从断点续跑`)
+    }
   }
 
   let lastValidation: { exitCode: number; stderr: string } = { exitCode: 0, stderr: '' }
@@ -256,19 +391,24 @@ export async function runContinue(
   ): Promise<string> => {
     const started = Date.now()
     const agent = new ToolLoopAgent({
-      model: getModel(model, sessionId),
+      model: getModel(model, sessionId, byok),
       tools,
       stopWhen: isStepCount(maxSteps),
       prepareStep: () => ({ instructions, activeTools }),
     })
+    const guard = createRunGuard(abortSignal, deadline)
+    let streamError: unknown = null // 提到 try 外：`await result.text` 会先抛「No output generated」，需在 catch 里转明确文案
     try {
-      const result = await agent.stream({ prompt, abortSignal })
+      const result = await agent.stream({ prompt, abortSignal: guard.signal })
       // 关键体验：writeFile 的文件内容在工具参数流中逐 token 生成，
       // 实时解码为代码文本推送（否则大文件生成期间界面数分钟无输出）
       const writers = new Map<string, { buf: string; emitted: number; header: string | null }>()
       for await (const part of result.fullStream) {
+        guard.bump(part)
         if (part.type === 'text-delta') {
           onEvent({ type: 'agent_delta', agent: roleName, delta: part.text })
+        } else if (part.type === 'error') {
+          streamError = (part as { error?: unknown }).error
         } else if (part.type === 'tool-input-start' && part.toolName === 'writeFile') {
           writers.set(part.id, { buf: '', emitted: 0, header: null })
         } else if (part.type === 'tool-input-delta' && writers.has(part.id)) {
@@ -302,11 +442,22 @@ export async function runContinue(
       const text = ((await result.text) ?? '').trim()
       const steps = await result.steps
       emitUsage(ctx, roleName, result)
-      console.log(`[jlcoding] ${roleName} 完成（${steps.length} 步），耗时 ${((Date.now() - started) / 1000).toFixed(1)}s`)
+      // 流内错误透出（404/429/403 → 可操作提示），避免上层只看到空输出
+      if (streamError && !text) {
+        throw new Error(describeStreamError(streamError, model ?? DEFAULT_MODEL))
+      }
+      console.log(`[jlcoding] ${roleName} 完成（${steps.length} 步），耗时 ${((Date.now() - started) / 1000).toFixed(1)}s model=${model ?? 'default'}`)
       return text
     } catch (e) {
-      if (abortSignal?.aborted || (e instanceof Error && e.name === 'AbortError')) throw new PausedError()
-      throw e
+      // `await result.text` 在流有错误时会先抛「No output generated」/ APICallError——优先还原真实原因
+      if (streamError) throw new Error(describeStreamError(streamError, model ?? DEFAULT_MODEL))
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/No output generated|Not Found|AI_APICallError|APICallError/i.test(msg)) {
+        throw new Error(describeStreamError(e, model ?? DEFAULT_MODEL))
+      }
+      throw guard.classify(e)
+    } finally {
+      guard.stop()
     }
   }
 
@@ -316,7 +467,7 @@ export async function runContinue(
     checkPaused()
     onEvent({ type: 'agent_start', agent: ROLE_NAMES[1], message: '正在设计架构' })
     onEvent({ type: 'task_progress', step: 2, total: 5, label: '架构设计师' })
-    design = await askSingle(ctx, ROLE_NAMES[1], `${ROLE_PROMPTS[1]}${ctx.agentHintText ?? ''}${formatFileContext(ctx.fileContext)}`, `用户需求：${userInput}\n\n业务分析师输出：\n${ctx.priorAnalysis}`)
+    design = await askSingle(ctx, ROLE_NAMES[1], `${ROLE_PROMPTS[1]}${ctx.agentHintText ?? ''}${formatFileContext(ctx.fileContext)}`, `用户需求：${userInput}\n\n业务分析师输出：\n${ctx.priorAnalysis}`, deadline)
     onEvent({ type: 'agent_complete', agent: ROLE_NAMES[1], result: design })
     // 落库由路由层在 onEvent 中处理（step 由路由写入）
   } else {
@@ -327,7 +478,7 @@ export async function runContinue(
   if (!completed.engineering) {
     checkPaused()
     const isModify = Boolean(ctx.incremental && ctx.existingFiles?.length)
-    const language = ctx.language ?? 'python'
+    const language = ctx.language ?? 'react'
     onEvent({
       type: 'agent_start',
       agent: ROLE_NAMES[2],
@@ -432,6 +583,156 @@ ${design ? `\n架构设计：\n${design}` : ''}`,
 // ---------- Mock 模式（无 API Key 时走完整两阶段事件流） ----------
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// ---------- 意图路由：CODE（生成/修改）| VERSION（版本对比/回滚/列表）| QA（问答直答） ----------
+// 规则层抽至 lib/intent-rules.ts（纯函数零依赖，scripts/test-intent-rules.cjs 确定性单测）
+
+export type { Intent }
+
+interface ClassifyDeps {
+  model?: string
+  sessionId?: string
+  byok?: ByokConfig
+}
+
+// LLM 兜底分类（规则未命中的模糊输入）：极简提示词只输出一个词，用 Zen 免费模型（零成本，~1-2s）
+async function classifyIntentLLM(deps: ClassifyDeps, text: string): Promise<'code' | 'version' | 'qa'> {
+  const agent = new ToolLoopAgent({
+    model: getModel(CLASSIFY_MODEL, deps.sessionId, deps.byok),
+    instructions: `将用户输入分类为以下之一，只输出一个词，不要任何解释、标点或换行：
+- CODE：要求创建新代码/应用，或修改现有代码
+- VERSION：对比、回滚、查询历史版本
+- QA：提问、求解释、求分析、闲聊
+
+背景：这是一个代码生成工作台，用户在其中提交需求生成应用，当前处于项目会话中。`,
+    stopWhen: isStepCount(1),
+  })
+  const guard = createRunGuard()
+  try {
+    const result = await agent.stream({
+      prompt: `用户输入：${text.slice(0, 200)}`,
+      abortSignal: guard.signal,
+    })
+    for await (const delta of result.textStream) guard.bump(delta) // 逐分片重置空闲看门狗
+    const out = ((await result.text) ?? '').trim().toUpperCase()
+    if (out.includes('CODE')) return 'code'
+    if (out.includes('VERSION')) return 'version'
+    return 'qa' // 默认问答：宁可直答也不误触发生成
+  } catch {
+    return 'qa' // 分类失败降级为问答（不冒进生成）
+  } finally {
+    guard.stop()
+  }
+}
+
+// 意图解析总入口：规则优先；未命中且有 LLM 时兜底分类；mock（无 Key 无 BYOK）纯规则，
+// 未命中默认 QA——由 mockChatReply 如实告知「演示模式」，不假装分类成功
+export async function resolveIntent(deps: ClassifyDeps, text: string): Promise<Intent> {
+  const rule = ruleIntent(text)
+  if (rule) return rule
+  if (!hasModel() && !deps.byok) return 'qa'
+  const llm = await classifyIntentLLM(deps, text)
+  if (llm === 'code') return 'code'
+  if (llm === 'version') return 'version_list' // 粗分类到版本模块：列表展示 + 提示可进一步说「对比 v1/v2」「回滚到 v1」
+  return 'qa'
+}
+
+// ---------- QA 直答：智能助手多步工具循环 + 流式输出（无确认卡，不进构建管线） ----------
+
+export interface ChatReplyContext {
+  history: { role: string; agent?: string | null; content: string }[]
+  projectBrief: string
+  files: { path: string; content: string }[]
+}
+
+export interface ChatReplyRun {
+  userInput: string
+  onEvent: (event: ServerEvent) => void
+  model?: string
+  sessionId?: string
+  byok?: ByokConfig
+  abortSignal?: AbortSignal
+  chat: ChatReplyContext
+}
+
+const CHAT_ROLE = '智能助手'
+
+export async function runChatReply(run: ChatReplyRun): Promise<string> {
+  if (!hasModel() && !run.byok) return mockChatReply()
+
+  const tools: ToolSet = {
+    web_search: tool({
+      description: '联网搜索（关键词查询，返回前 5 条结果；不可达时如实返回说明）',
+      inputSchema: z.object({ query: z.string().describe('搜索关键词') }),
+      execute: async ({ query }) => webSearch(query),
+    }),
+    read_url: tool({
+      description: '读取网页正文（用户给出具体链接时优先使用，最多 4000 字）',
+      inputSchema: z.object({ url: z.string().describe('完整 URL') }),
+      execute: async ({ url }) => readUrlText(url),
+    }),
+    read_file: tool({
+      description: '读取当前项目生成的源码文件（回答本项目相关问题优先使用，按需查看实际代码）',
+      inputSchema: z.object({ path: z.string().describe('文件路径，如 src/App.jsx') }),
+      execute: async ({ path }) => {
+        const f = run.chat.files.find((x) => x.path === path)
+        if (!f) {
+          return {
+            error: `文件不存在：${path}`,
+            available: run.chat.files.map((x) => x.path).join(', ') || '（项目暂无文件）',
+          }
+        }
+        return { path, content: f.content.slice(0, 8000) }
+      },
+    }),
+  }
+
+  const historyText = run.chat.history
+    .slice(-10)
+    .map((m) => `${m.role === 'user' ? '用户' : (m.agent ?? '助手')}：${m.content.slice(0, 300)}`)
+    .join('\n')
+
+  const agent = new ToolLoopAgent({
+    model: getModel(CHAT_MODEL, run.sessionId, run.byok),
+    tools,
+    instructions: `你是 jlCoding 工作台的${CHAT_ROLE}。用户在这个工作台用自然语言生成应用，现在向你提问——直接回答问题，不要生成代码文件，也不要调用除下列之外的工具。
+
+${run.chat.projectBrief}
+
+可用工具与使用原则：
+- 回答与本项目相关的问题（功能实现、版本差异、代码分析）优先 read_file 查看实际代码后再回答
+- 需要外部资料时用 web_search；用户给了链接时用 read_url
+- 工具失败（网络不可达等）时如实说明，不要编造结果
+
+要求：中文回答、简洁直接、先给结论；引用项目代码时给关键片段即可；与生成/修改应用相关的新需求，提醒用户在工作台输入框直接描述即可。`,
+    stopWhen: isStepCount(6),
+  })
+  const guard = createRunGuard(run.abortSignal)
+  try {
+    const result = await agent.stream({
+      prompt: `对话历史（最近）：\n${historyText || '（无）'}\n\n用户最新提问：${run.userInput}`,
+      abortSignal: guard.signal,
+    })
+    for await (const part of result.fullStream) {
+      guard.bump()
+      if (part.type === 'text-delta') {
+        run.onEvent({ type: 'agent_delta', agent: CHAT_ROLE, delta: part.text })
+      }
+    }
+    const text = ((await result.text) ?? '').trim()
+    emitUsage(run, CHAT_ROLE, result)
+    return text || '（模型未返回内容，请重试）'
+  } catch (e) {
+    throw guard.classify(e)
+  } finally {
+    guard.stop()
+  }
+}
+
+async function mockChatReply(): Promise<string> {
+  await sleep(500)
+  return '【演示模式】当前平台未配置真实模型 API Key，暂无法回答这类问题（不假装分类与回答成功）。可在模型选择中配置「我自己的 API Key」（BYOK）后重试；或描述一个想做的应用，体验完整生成流程（该路径有预置演示数据）。'
+}
 
 async function runMockAnalyze({ userInput }: RunContext): Promise<string> {
   await sleep(900)

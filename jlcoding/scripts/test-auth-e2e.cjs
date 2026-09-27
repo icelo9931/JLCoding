@@ -68,13 +68,33 @@ async function main() {
     return events
   }
 
-  // 5. 别人（无 cookie）不能操作我的项目
+  // 5. 未登录（无 cookie）不能操作我的项目 → 401（登录语义）；B 账号越权 → 403（权限语义）
   res = await fetch(`${base}/api/projects/${project.id}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: 'x', phase: 'analyze' }),
   })
-  console.log(`${ts()} 5. 越权操作被拦截: ${res.status === 403 ? 'PASS ✓' : 'FAIL ✗(' + res.status + ')'}`)
+  const unauth = res.status
+  const otherEmail = `other${Date.now().toString(36)}@jlcoding.dev`
+  let resB = await fetch(`${base}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: otherEmail, password }),
+  })
+  const cookieB = (resB.headers.get('set-cookie') ?? '').split(';')[0]
+  const cross = async (path, init) => (await fetch(`${base}${path}`, { ...init, headers: { ...(init?.headers ?? {}), cookie: cookieB } })).status
+  resB = await fetch(`${base}/api/projects/${project.id}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: cookieB },
+    body: JSON.stringify({ message: 'x', phase: 'analyze' }),
+  })
+  const detailB = await cross(`/api/projects/${project.id}`)
+  const filesB = await cross(`/api/projects/${project.id}/files`)
+  const zipB = await cross(`/api/projects/${project.id}/download`)
+  console.log(
+    `${ts()} 5. 越权矩阵: 未登录chat=${unauth === 401 ? '401 PASS ✓' : `FAIL(${unauth})`}｜B账号chat=${resB.status === 403 ? '403 PASS ✓' : `FAIL(${resB.status})`}｜detail=${detailB === 403 ? '✓' : `✗(${detailB})`}｜files=${filesB === 403 ? '✓' : `✗(${filesB})`}｜zip=${zipB === 403 ? '✓' : `✗(${zipB})`}`
+  )
+  if (unauth !== 401 || resB.status !== 403 || detailB !== 403 || filesB !== 403 || zipB !== 403) process.exit(1)
 
   // 6. 分析 → 确认
   let ev = await chat({ message: '生成一个计算器，计算阳历和阴历日期，输入一个阳历或者阴历日期，计算出对应的另一个日期', phase: 'analyze', model: 'deepseek-v4-pro' })

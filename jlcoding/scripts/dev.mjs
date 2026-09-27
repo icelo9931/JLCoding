@@ -6,7 +6,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
-const env = fs.readFileSync(path.join(root, '.env'), 'utf8')
+// 去 BOM：PowerShell Set-Content -Encoding UTF8 (PS5.1) 会在文件头写 BOM，
+// 导致首行 DATABASE_URL 正则匹配失败 → 误判为 postgres 用错 schema（真实踩坑）
+const env = fs.readFileSync(path.join(root, '.env'), 'utf8').replace(/^\uFEFF/, '')
 const dbUrl = env.match(/^DATABASE_URL="?([^"\n]+)"?$/m)?.[1] ?? ''
 
 const isSqlite = dbUrl.startsWith('file:')

@@ -195,6 +195,7 @@ export default function HomePage() {
                 onOpenConnect={() => setConnectOpen(true)}
                 onLogin={() => setLoginOpen(true)}
                 onLogout={logout}
+                onDeleted={(id) => setProjects((prev) => prev.filter((p) => p.id !== id))}
               />
             </div>
           </Panel>
@@ -329,7 +330,7 @@ export default function HomePage() {
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); start() }
               }}
               rows={6}
-              placeholder={agentId === 'data-analyst' ? '描述你的数据问题，可点左下角 📎 上传文件、🔗 添加链接…' : '描述你想做的应用（可指定编程语言，未指定默认 Python；如"做一个网页版待办"则用 React）…'}
+              placeholder={agentId === 'data-analyst' ? '描述你的数据问题，可点左下角 📎 上传文件、🔗 添加链接…' : '描述你想做的应用（默认 React 网页应用：实时预览 + 一键线上使用；说"用 Python"则生成 tkinter 桌面版）…'}
               className="w-full resize-none bg-transparent px-1 text-base leading-relaxed outline-none placeholder:text-zinc-600"
             />
             {/* 工具条：左 = 模式 + 上传 + 链接；右 = 模型及状态 + 开始生成 */}

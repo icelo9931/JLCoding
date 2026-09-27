@@ -54,7 +54,7 @@ async function main() {
   }
 
   // 场景 1：分析 → 等待确认（不直接生成）
-  let ev = await chat({ message: '做一个待办事项应用', phase: 'analyze', model: 'deepseek-v4-flash' })
+  let ev = await chat({ message: '做一个待办事项应用', phase: 'analyze', model: 'deepseek-v4.1-flash' })
   const awaited = ev.find((e) => e.type === 'awaiting_confirmation')
   console.log(`[${ts()}] 场景1 分析完成并等待确认: ${awaited ? 'PASS ✓' : 'FAIL ✗'}（分析 ${awaited?.analysis?.length ?? 0} 字）`)
   if (!awaited) process.exit(1)

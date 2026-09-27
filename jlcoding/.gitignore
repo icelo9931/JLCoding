@@ -39,6 +39,9 @@ prisma/dev.db-journal
 dev-out.log
 dev-err.log
 
+# 构建时生成（scripts/build-info.mjs，每次构建覆盖；仓库不放静态副本）
+public/build-info.json
+
 # vercel
 .vercel
 

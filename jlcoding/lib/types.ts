@@ -1,4 +1,5 @@
 export type ServerEvent =
+  | { type: 'run_started'; provider: string; model: string; runId: string; intent?: 'code' | 'chat' }
   | { type: 'agent_start'; agent: string; message: string }
   | { type: 'agent_delta'; agent: string; delta: string }
   | { type: 'agent_complete'; agent: string; result: string }
@@ -11,7 +12,8 @@ export type ServerEvent =
   | { type: 'awaiting_confirmation'; analysis: string }
   | { type: 'paused' }
   | { type: 'error'; message: string }
-  | { type: 'complete'; projectId: string }
+  | { type: 'complete'; projectId: string; intent?: 'code' | 'chat' | 'version' }
+  | { type: 'version_created'; version: number; sha: string; summary: string }
 
 export type AgentRole = '业务分析师' | '架构设计师' | '代码工程师' | '测试工程师' | '修复工程师'
 

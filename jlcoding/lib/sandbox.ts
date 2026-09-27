@@ -2,6 +2,8 @@
 // runCommand 为模拟校验（JSON 解析 / 必需文件 / 依赖声明 / 括号平衡检查）。
 // 预览由前端 Sandpack 在浏览器内完成真实编译，编译耗时由前端回传日志。
 
+import { detectEntry, isPythonProject } from './app-meta'
+
 export interface CommandResult {
   stdout: string
   stderr: string
@@ -50,7 +52,8 @@ export class Sandbox {
   private validate(): CommandResult {
     const errors: string[] = []
     const paths = Array.from(this.files.keys())
-    const isPython = paths.some((p) => p.endsWith('.py')) && !paths.some((p) => /^(index|App)\.(js|jsx)$/.test(p) && !p.includes('/'))
+    // 入口与语言判定与前端 Sandpack 预览共用同一套规则（lib/app-meta），保证「校验通过 ⇔ 预览可渲染」
+    const isPython = isPythonProject(paths)
 
     if (isPython) {
       // Python 项目：入口 main.py + 括号平衡
@@ -87,10 +90,12 @@ export class Sandbox {
       }
     }
 
-    if (!this.files.has('index.js') && !this.files.has('index.jsx') && !this.files.has('src/index.js')) {
-      errors.push('error: 缺少入口文件 index.js')
+    // 入口检测与前端 normalizeFiles 同源：index.js > index.jsx > src/index.js > src/index.jsx
+    const entry = detectEntry(paths)
+    if (!entry) {
+      errors.push('error: 缺少入口文件 index.js（或 index.jsx / src/index.js）')
     }
-    if (!this.files.has('App.js') && !this.files.has('App.jsx') && !this.files.has('src/App.js')) {
+    if (!this.files.has('App.js') && !this.files.has('App.jsx') && !this.files.has('src/App.js') && !this.files.has('src/App.jsx')) {
       errors.push('error: 缺少根组件 App.js')
     }
 
@@ -105,6 +110,9 @@ export class Sandbox {
         for (const offender of constReassignments(content)) {
           errors.push(`error: ${path} 对 const 常量 ${offender} 重新赋值（需改为 let 声明），行内位置见代码`)
         }
+        for (const missing of unresolvedImports(path, content, paths)) {
+          errors.push(`error: ${path} 引用了不存在的文件 ${missing}（import 无法解析，预览/部署会失败）`)
+        }
       }
     }
 
@@ -117,6 +125,43 @@ export class Sandbox {
       exitCode: 0,
     }
   }
+}
+
+// 相对 import 解析检查：import/from './x' 必须能解析到文件集内的实际文件
+// （esbuild/Sandpack 同规则：x、x.js、x.jsx、x.ts、x.tsx、x/index.*）。
+// 把「用户看到的编译/打包错误」前移到「交付前校验 → 自动修复循环」。
+function unresolvedImports(importer: string, source: string, paths: string[]): string[] {
+  const specifiers = new Set<string>()
+  const fromRe = /\bfrom\s+['"](\.[^'"]+)['"]/g
+  const sideRe = /^[ \t]*import\s+['"](\.[^'"]+)['"]/gm
+  let m: RegExpExecArray | null
+  while ((m = fromRe.exec(source))) specifiers.add(m[1])
+  while ((m = sideRe.exec(source))) specifiers.add(m[1])
+
+  const dir = importer.includes('/') ? importer.slice(0, importer.lastIndexOf('/')) : ''
+  const missing: string[] = []
+  for (const spec of Array.from(specifiers)) {
+    if (spec.endsWith('.css')) continue // css 由打包/预览单独处理
+    const target = pathJoin(dir, spec)
+    const candidates = [
+      target,
+      `${target}.js`, `${target}.jsx`, `${target}.ts`, `${target}.tsx`,
+      `${target}/index.js`, `${target}/index.jsx`, `${target}/index.ts`, `${target}/index.tsx`,
+    ]
+    if (!candidates.some((c) => paths.includes(c))) missing.push(spec)
+  }
+  return missing
+}
+
+function pathJoin(dir: string, rel: string): string {
+  // 先拼接再按段 split（段级处理 ../ 与 .），过滤空段
+  const combined = (dir ? `${dir}/` : '') + rel.replace(/^\.\//, '')
+  const stack: string[] = []
+  for (const part of combined.split('/')) {
+    if (part === '..') stack.pop()
+    else if (part !== '.' && part !== '') stack.push(part)
+  }
+  return stack.join('/')
 }
 
 function balancedBraces(source: string): boolean {

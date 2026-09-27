@@ -18,18 +18,24 @@ model User {
 }
 
 model Project {
-  id        String    @id @default(cuid())
-  name      String
-  status    String    @default("draft") // draft | building | awaiting | paused | ready | error
-  mode      String    @default("novice") // novice | expert
-  agent     String? // 主导 agent id
-  model     String? // OpenCode Go 模型 ID
-  userId    String?
-  user      User?     @relation(fields: [userId], references: [id])
-  messages  Message[]
-  files     File[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id           String    @id @default(cuid())
+  name         String
+  status       String    @default("draft") // draft | building | awaiting | paused | ready | error
+  mode         String    @default("novice") // novice | expert
+  agent        String? // 主导 agent id
+  model        String? // OpenCode Go 模型 ID
+  provider     String? // 本次生成路径：'opencode:<modelId>' | 'mock'（记录级区分真实调用与演示路径）
+  runStartedAt DateTime? // 最近一次生成的开始时间（building 陈旧自愈判据）
+  published    Boolean   @default(false) // 发布到「发现」公开列表
+  publishedAt  DateTime? // 发布时间（列表排序）
+  userId       String?
+  user         User?     @relation(fields: [userId], references: [id])
+  messages     Message[]
+  files        File[]
+  versions     ProjectVersion[]
+  deploys      Deploy[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 model Message {
@@ -46,14 +52,43 @@ model Message {
 }
 
 model File {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   projectId String
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   path      String
   content   String
   language  String?
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime  @updatedAt
 
   @@unique([projectId, path])
+  @@index([projectId])
+}
+
+// 版本快照：每次生成完成（初始化/增量修改/回滚）追加一条，append-only 历史（git-revert 语义）
+// filesJson 为全量文件快照（TEXT 存储，SQLite/Neon 双兼容）；sha 为整个文件集的内容哈希
+model ProjectVersion {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version   Int
+  sha       String
+  provider  String? // 该次生成实际走的路径：'opencode:<modelId>' | 'mock'（与 Project.provider 同源）
+  summary   String
+  filesJson String
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, version])
+  @@index([projectId])
+}
+
+// 部署产物：esbuild 打包后的自包含单文件 HTML（React 应用可网页部署；Python 不适用）
+model Deploy {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  html      String
+  sha       String
+  createdAt DateTime @default(now())
+
   @@index([projectId])
 }

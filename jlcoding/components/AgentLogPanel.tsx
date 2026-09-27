@@ -41,6 +41,8 @@ export function AgentLogPanel({ logs, files, simple, updatedPaths }: {
       { label: '编写代码', state: paths.length > 0 ? 'done' : runningEntry?.agent === '代码工程师' ? 'running' : 'idle', hint: paths.length > 0 ? `已生成 ${paths.length} 个文件` : undefined },
       { label: '构建校验', state: lastCommand ? (lastCommand.status === 'error' ? 'idle' : 'done') : runningEntry?.agent === '测试工程师' ? 'running' : 'idle', hint: lastCommand ? (lastCommand.status === 'error' ? '发现问题，修复中…' : '通过 ✓') : undefined },
     ]
+    // 模型调用透明化（与专家模式「模型调用」日志卡片同数据源）：Provider / Model / Request ID / 首 Token 延迟
+    const runCall = [...logs].reverse().find((l) => l.title.startsWith('模型调用'))
     return (
       <div className="flex h-full flex-col">
         <div className="flex items-center gap-2 border-b px-3 py-2.5 text-xs font-medium text-zinc-300">
@@ -57,6 +59,11 @@ export function AgentLogPanel({ logs, files, simple, updatedPaths }: {
               {s.hint && <span className="ml-auto text-xs text-zinc-500">{s.hint}</span>}
             </div>
           ))}
+          {runCall && (
+            <div className="mt-2 rounded-lg border border-zinc-800/60 bg-zinc-950/60 px-3 py-2.5 font-mono text-[10px] leading-relaxed text-zinc-500" title="本轮生成的模型调用信息（来源透明，可在专家模式工作日志查看更多）">
+              {runCall.detail}
+            </div>
+          )}
           <p className="px-1 pt-2 text-[11px] leading-relaxed text-zinc-600">
             切换到专家模式可查看每个文件的完整代码与构建日志
           </p>
