@@ -5,10 +5,8 @@ services:
     plan: free
     region: singapore
     rootDir: jlcoding
-    # 构建：依赖 → prisma client → 平台构建 SHA → schema 同步（幂等，兜底；Pre-Deploy 不生效时也建表）→ next build
+    # 构建：依赖 → prisma client → 平台构建 SHA → schema 同步（幂等；free 层不支持 Pre-Deploy，故放构建内）→ next build
     buildCommand: npm install && npx prisma generate && node scripts/build-info.mjs && npx prisma db push --schema prisma/schema.prisma --skip-generate && npm run build
-    # Pre-Deploy 亦执行 schema 同步（幂等）：与构建产物解耦（若 Dashboard 已启用则双保险）
-    preDeployCommand: npx prisma db push --schema prisma/schema.prisma --skip-generate
     startCommand: npm run start
     envVars:
       - key: NODE_VERSION
