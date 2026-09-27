@@ -5,9 +5,9 @@ services:
     plan: free
     region: singapore
     rootDir: jlcoding
-    buildCommand: npm install && npx prisma generate && node scripts/build-info.mjs && npm run build
-    # Pre-Deploy 执行 schema 同步（幂等）：ProjectVersion/Deploy 等新表自动建到 Neon，
-    # 与构建产物解耦，避免把 db push 混入 buildCommand
+    # 构建：依赖 → prisma client → 平台构建 SHA → schema 同步（幂等，兜底；Pre-Deploy 不生效时也建表）→ next build
+    buildCommand: npm install && npx prisma generate && node scripts/build-info.mjs && npx prisma db push --schema prisma/schema.prisma --skip-generate && npm run build
+    # Pre-Deploy 亦执行 schema 同步（幂等）：与构建产物解耦（若 Dashboard 已启用则双保险）
     preDeployCommand: npx prisma db push --schema prisma/schema.prisma --skip-generate
     startCommand: npm run start
     envVars:
