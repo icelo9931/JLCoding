@@ -143,15 +143,27 @@
 
 ## 技术复核对照表（7 个复核点 → 实现 + 证据）
 
-| # | 复核点 | 实现位置 | 验证证据 |
+> 与最新一轮复核意见逐条对齐；所有证据脚本见 `jlcoding/scripts/`，均可本地复跑。
+
+| # | 复核点 | 实现位置 | 验证证据（可复跑） |
 |---|---|---|---|
-| 1 | React 入口/依赖/校验 + 超时/落库/重试收敛/前后端一致 | 入口检测统一 `lib/app-meta.ts`（index.js > index.jsx > src/index.js > src/index.jsx，sandbox 校验与 Sandpack 预览同源）；超时 = **空闲看门狗 120s** + 管线 900s 总闸（`lib/agent.ts`）；失败落库 status=error + 已完成阶段保留；**三出口统一收敛**（流正常/网络异常/用户暂停 → finally refetch 以 DB 为准，进度条不卡中间值）；陈旧 building 自愈（runStartedAt + 进程注册表） | `test-p0.cjs` 22/22（含真实死连接→落库→续跑闭环）；`test-auth-e2e.cjs`（修复循环 1,0,1,0,0 收敛） |
-| 2 | 区分真实模型调用与无 Key mock 路径 | **记录级**：`Project.provider`（`opencode:<modelId>`/`mock`）+ 每轮 system 消息落库（刷新可恢复）+ `ProjectVersion.provider` 历史可追溯；`GET /api/status`（hasModel/网关探测：任何 HTTP 响应=可达）+ 顶栏徽章 | `test-p0.cjs`（run_started 事件 + provider 落库 + system/run 消息）；`/api/status` 实测 hasModel=true |
-| 3 | 计算器/贪吃蛇/同项目两轮增量，逐轮核对 | 版本系统（每轮 vN + SHA-256 文件集哈希）+ 部署 bundle（Preview 的编译级证据） | `test-review-e2e.cjs`：计算器三轮（版本严格递增、SHA 逐轮变化、增量 1/10 与 3/12、旧功能残留、校验 exit 0、部署成功）+ 回滚精确还原；贪吃蛇全链路（含 TSX 打包） |
-| 4 | 刷新/退出/全新会话重登恢复 + Preview 重渲染 | 全状态从 DB 恢复（对话/文件/版本/provider/待确认与暂停态）；浏览器级 Playwright 断言（iframe src 非空 + `#root` 子元素轮询） | `test-restore.cjs` 20/20；`test-preview-browser.cjs`：登录/刷新/重登三场景 iframe 挂载（CDN 可用时 PASS，国内直连波动时如实 SKIP），**部署页零 CDN 依赖稳定渲染** |
-| 5 | 版本历史/旧版本切换/真实回滚，回滚后源码与 Preview 同步 | `ProjectVersion` append-only 快照（version/SHA/provider/filesJson）；rollback API `$transaction` 原子覆盖 + append 新条目；前端 resetFiles 整体替换 → Sandpack 自动重编译 | `test-p1.cjs` + `test-review-e2e.cjs`：回滚后文件集哈希**精确等于**目标版本（真实回滚非指针切换）；历史 3 版全保留 |
-| 6 | 生成应用的部署范围 + 可访问链接 + 构建对应 SHA | 范围如实声明（React 可部署/Python 拒绝并说明）；esbuild 服务端打包 → 自托管公开链接 `/app/:id` + **bundle SHA-256**；平台自身 commit SHA（`scripts/build-info.mjs` → 顶栏 chip 直链 GitHub） | `test-p1.cjs`（部署 404→200、Python 400）；`test-preview-browser.cjs`（部署页真实挂载 + 无 JS 错误）；render.yaml buildCommand 已注入 build-info |
-| 7 | 项目详情/文件列表/ZIP 的账号权限边界 | `lib/access.ts` 统一套用 7 个项目级接口（401/403/409 语义区分，越权返回 JSON 错误非数据流）；遗留无主项目放行（迁移数据，文档注明） | `test-restore.cjs` 越权矩阵 7/7 全 403（含 ZIP 断言非 PK 流）+ owner 正常 |
+| **1** | React 入口/依赖/校验 + **生成超时、失败落库、重试收敛**、前端状态与后端最终一致 | **入口/依赖/校验**：统一在 `lib/app-meta.ts`（`index.js > index.jsx > src/index.js > src/index.jsx`；sandbox 校验与 Sandpack 预览同源，修掉「生成 index.jsx 却强制 main=index.js」白屏）；依赖与语法校验 + **const 重赋值检测** + **相对 import 解析检查**（`lib/sandbox.ts`）。**超时**：单步**空闲看门狗 120s**（每分片重置）+ **管线总闸 900s**（`lib/agent.ts`，区分「暂停」与「超时」）。**失败落库**：超时/异常 → `error` 事件 + `status=error` 落库，已完成阶段保留可续跑；陈旧 `building` 自愈（`runStartedAt` + `lib/run-registry.ts`）。**重试收敛**：分析/重试**内容去重防双写**、每步空输出自动重试一次、**三出口统一从 DB 收敛**（正常结束/网络异常/用户暂停 → `syncFromDb`，进度条不卡中间值）。 | `test-p0.cjs` **19/19**（含真实死连接→`error` 落库→**断点续跑**闭环、陈旧 building 自愈、防双写 1→1）；`test-import-check.cjs` **3/3**（坏 import 检出 / TSX 通过 / 目录式与 css 零误报）；`test-auth-e2e.cjs`（修复循环 `1,0,1,0,0` 收敛） |
+| **2** | 核对线上是否**真实命中 OpenCode Provider**，区分真实调用与无 Key mock 路径 | **全局状态**：`GET /api/status` 返回 `hasModel` / `baseUrl` / `defaultModel` / `gatewayReachable`（探测语义：任何 HTTP 响应即可达）+ 顶栏「真实模型 / Mock 演示」徽章。**记录级区分**：`Project.provider`（`opencode:<modelId>` / `byok:<modelId>` / `mock`）+ 每轮 `run_started` 事件 + 工作日志「模型调用」卡片（Provider/Model/Request ID/首 Token 延迟）+ **`ProjectVersion.provider` 历史可追溯**。mock 路径：对话区横幅明确标注「演示模式（未配置真实模型）」。 | `test-p0.cjs`（`run_started.provider=opencode:*` + `Project.provider` 落库 + `req_` runId）；`/api/status` 实测 `hasModel=true, baseUrl=.../zen/v1, gatewayReachable=true`；`test-ux-browser.cjs`（真实模式无 mock 横幅） |
+| **3** | 完成 **Prompt A 计算器 / Prompt B 贪吃蛇 / 同项目连续两轮增量**；逐轮核对**旧功能、源码、Preview、版本号、SHA** | 版本系统（每轮 `vN` + SHA-256 文件集哈希）+ 增量 diff 式修改（只改相关文件）+ 部署 bundle（Preview 的编译级证据）。 | `test-review-e2e.cjs`（+ `-resume` 续跑版）：计算器 **v1→v2→v3** 严格递增、SHA 逐轮变化、增量仅改 **1/10** 与 **3/12** 文件（**内容级 SHA-256 哈希比对**，其余文件哈希不变）、旧功能残留软断言、**校验 exit 0**、**部署成功**、**回滚精确还原**；贪吃蛇全链路（含 **TSX** 打包）。`test-round5.cjs`：追加需求 → 新版本 + 画布自动重部署 |
+| **4** | 完成**刷新 / 退出 / 全新浏览器会话重登和恢复**，核对**项目、对话、源码、版本、Preview** | 全状态从 DB 恢复（对话/文件/版本/provider/待确认与暂停态）；**对话历史 hydration 修复**（此前 useState 初值早于 detail 到达导致刷新后空白）；进度面板 `ready` 兜底四阶段全勾 + 进度 100%。**Preview 重渲染**：浏览器级 Playwright 轮询 iframe `#root` 子元素；国内 CDN 波动时自动降级**零 CDN 部署页 iframe**（`/app/:id`）。 | `test-restore.cjs` **20/20**（刷新/退出/全新会话重登：对话条数、文件集哈希、版本、provider 一致；退出后 cookie 清除 + 401 + 列表空）；`test-refresh-restore.cjs` **5/5**（刷新后 21 条历史完整恢复、hydration 恰好一次）；`test-preview-browser.cjs`（登录/刷新/重登三场景 iframe 挂载 + 部署页零 CDN 稳定渲染 + 无 JS 错误） |
+| **5** | 增加**版本历史、旧版本切换和真实回滚**，确认回滚后**源码与 Preview 同步** | `ProjectVersion` append-only（version/SHA-256/provider/filesJson）；`POST .../versions/:v/rollback` 用 **`$transaction`** 原子覆盖（删旧文件→写快照→建「回滚自 vN」新条目→状态置 ready）；前端 `resetFiles` 整体替换 → 画布/Sandpack 同步；TopBar 版本徽章 `vN · sha8` + 历史下拉 + 回滚。 | `test-p1.cjs`：回滚后**文件集哈希精确等于**目标版本（真实回滚，非指针切换）、append-only 全保留；`test-round5.cjs`：回滚后画布自动重部署显示旧版；`test-intent.cjs`：**对话触发**「回滚到 v1」→ `version_created` + 哈希精确还原 |
+| **6** | **明确生成应用的线上部署范围**，实现**可访问部署链接**，展示**与 GitHub 对应的构建 SHA** | **范围如实声明**：React 应用可部署为静态网页；Python 为桌面应用不支持网页部署（`/deploy` 返回 400 并说明，按钮禁用）。**可访问链接**：`lib/bundler.ts` 服务端 esbuild 打包（automatic runtime、TS/TSX、CSS 内联）→ 自包含单文件 HTML 存 `Deploy` 表 → 公开 `GET /app/:id`（`no-store`，无需登录）+ 产物 **bundle SHA-256**。**平台构建 SHA**：`scripts/build-info.mjs`（读 `VERCEL_GIT_COMMIT_SHA`/`RENDER_GIT_COMMIT`，回退 `git rev-parse HEAD`）→ `public/build-info.json` → 顶栏 `build <sha8>` chip **直链 GitHub commit** + `/api/status` 返回；`render.yaml` buildCommand 已注入。 | `test-p1.cjs`（部署 404→200、Python 部署 400、bundle SHA 64 位）；`test-preview-browser.cjs`（部署页真实挂载 + 无运行时错误）；`test-round4-fix.cjs`（`/app/:id` 为计算器非待办）；`build-info.json` 实测含 `sha`，TopBar chip 直链 GitHub |
+| **7** | 复核**项目详情、文件列表和 ZIP 下载接口的账号权限边界** | `lib/access.ts` 的 `requireProjectAccess` 统一套用**全部项目级接口**（detail/files/download/chat/versions/rollback/deploy），语义区分：未登录 **401** / 非归属 **403** / 生成中 **409** / DB 不可达 **503**，越权返回 **JSON 错误而非数据流**。**「发现」只读例外**：仅当 `published=true` 时对所有人放行**只读**（写操作仍 owner-only）。遗留无主项目放行（迁移数据，已注明）。 | `test-restore.cjs` 越权矩阵 **7/7 全 403**（含 **ZIP 断言响应为 JSON 非 PK 流**）+ owner ZIP 正常；`test-p0.cjs`（detail/files/ZIP/chat 未登录 401 / B 403）；`test-discover.cjs` **19/19**（未发布 B 403/匿名 401；已发布 B 与匿名可读；**B 写操作全 403**；取消发布即恢复 403） |
+
+### 本轮新增功能（复核点之外的延展能力）
+
+| 新增 | 说明 | 证据 |
+|---|---|---|
+| **意图路由** | 规则层（`lib/intent-rules.ts`，纯函数可单测）+ 轻量模型兜底：CODE 走构建管线 / **QA 智能助手直答**（`web_search`/`read_url`/`read_file` 工具，无确认卡、不动进度条）/ **VERSION 确定性处理**（对比 diff / 回滚 / 列表，零 LLM）；VERSION 优先于 CODE，杜绝「想看 diff 却开始重新生成」 | `test-intent.cjs` **23/23**（真实模型）；`test-intent-rules.cjs` **20/20**（含用户原话「两轮的旧功能、源码、Preview、版本号和 SHA，请给出对比」→ `version_diff`） |
+| **「发现」公开社区** | 一键发布项目到公开列表（`/discover`，无需登录），展示**完整对话 + 版本时间线 + 源码 + ZIP + 在线体验**与**发布者（用户名 + 脱敏邮箱 `jl9***`）**；私有项目仍仅本人可见，写操作永远 owner-only，可随时取消发布 | `test-discover.cjs` **19/19**；`test-discover-browser.cjs` **11/11**（只读工作台：无输入框 + 只读徽章 + 对话可见；owner 仍可编辑） |
+| **BYOK（自带 Key）** | 模型下拉「使用我自己的 API Key」：Base URL/Key/模型 ID（含连通性测试），仅存浏览器本地，服务端仅当次内存使用（不落库不打日志）；无平台 Key 时 BYOK 可走真实生成 | `test-ux-browser.cjs`（下拉含 BYOK 入口 + 未配置弹设置窗） |
+| **暂停 / 消息操作** | 生成中面板内「暂停」按钮（点击后 DB `paused` 落库可续跑）；消息 hover「复制」（已复制反馈）+「修改重发」（填入输入框编辑重发） | `test-ux-round3.cjs` **6/6** |
+| **画布零 CDN 兜底** | 有部署记录默认走部署页 iframe（毫秒级、零 CDN）；Sandpack 6s 未编译完成自动降级；版本变化自动重新部署 | `test-round5.cjs` **7/7** |
 
 ## 文件存储位置与数据说明（如实）
 
@@ -174,11 +186,13 @@
 
 正式对外建议绑定自定义域名（指向 Render，无需备案即可直连；需备案 CDN 加速则另议）。每次 `git push` 两平台自动部署。
 
+**线上如何自查「是否真实命中 Provider」（复核点 2 的核对方式）**：线上打开站点 → `GET /api/status` 应返回 `hasModel=true` 与 `baseUrl=https://opencode.ai/zen/v1`，`gatewayReachable=true`（顶栏显示「真实模型」徽章）；随后任意生成一轮，展开工作日志「模型调用」卡片可看到 **Provider / Model / Request ID / 首 Token 延迟**，且 `Project.provider` 落库为 `opencode:<modelId>`（而非 `mock`）——即证明走的是真实模型调用；若把服务端 `OPENCODE_API_KEY` 置空（或 `JLCODING_MOCK=1`），同一位置会显示「Mock 演示」且对话区出现「演示模式」横幅，两条路径可明确区分。
+
 ## 当前完成程度
 
-- ✅ **已完成**：上文"功能全景"全部条目（五角色管线/确认追加/流式/暂停断点/增量修改/多轮修复/Token 展示/双语言（**默认 React**+按需 Python）+const 与 import 校验/6 Agent+自定义/Skill+MCP 面板/文件+链接输入/Sandpack 预览/账号隔离/401·403·409 权限矩阵/**模型调用透明化+BYOK**/provider 记录级区分/版本快照+append-only 回滚/esbuild 自托管部署+产物 SHA+「线上使用」/平台构建 SHA/GitHub 推送/ZIP/双模式/双平台部署）
-- ✅ **复核专项全部落地**：见「技术复核对照表」——7 个复核点均有实现位置 + 可复跑的验证脚本 + 实测输出
-- ⚠️ **部分完成**：MCP 仅说明级注入（未协议级调用）；GitHub OAuth 登录未做（按钮已预留）；图片上传不解析内容（如实标注）；自动修复上限 3 轮；浏览器内 Sandpack 预览依赖 codesandbox CDN（国内直连波动时挂载慢/失败——部署页 `/app/:id` 为零 CDN 依赖的替代渲染通道）；JWT 无状态登出；**网关偶发瞬时 404**（continue 工程师阶段曾出现 `APICallError: Not Found`，API 复跑多次成功属抖动——已用明确文案提示可「继续生成」重试，runToolLoop 自动重试一次为后续可加项）
+- ✅ **已完成**：上文"功能全景"全部条目（五角色管线/确认追加/流式/暂停断点/增量修改/多轮修复/Token 展示/双语言（**默认 React**+按需 Python）+const 与 import 校验/6 Agent+自定义/Skill+MCP 面板/文件+链接输入/Sandpack+**部署页零 CDN 双预览**/账号隔离/401·403·409 权限矩阵/**模型调用透明化+BYOK**/provider 记录级区分/**版本快照+append-only 真实回滚**/esbuild 自托管部署+产物 SHA+「线上使用」/**平台构建 SHA 直链 GitHub**/**意图路由（问答直答 + 版本确定性处理）**/**「发现」公开社区**/删除项目/GitHub 推送/ZIP/双模式/双平台部署）
+- ✅ **复核专项全部落地**：见「技术复核对照表」——**7 个复核点逐条有实现位置 + 可复跑的验证脚本 + 实测输出**（20+ 个测试脚本，`tsc` 与 `lint` 全绿）
+- ⚠️ **部分完成**：MCP 仅说明级注入（未协议级调用）；GitHub OAuth 登录未做（按钮已预留）；图片上传不解析内容（如实标注）；自动修复上限 3 轮；浏览器内 Sandpack 预览依赖 codesandbox CDN（国内直连波动时挂载慢/失败——已默认切**零 CDN 部署页预览**兜底）；JWT 无状态登出（浏览器清 cookie）；**网关偶发瞬时 404**（API 复跑多次成功属抖动——已用明确文案提示可「继续生成」重试）
 - ❌ **未完成**：E2B 真实服务器沙箱（`npm install/build` 真跑）；跨会话长期记忆（Skill 已部分覆盖风格偏好）；逐文件 diff 视图（版本回滚已覆盖主要诉求）；移动端专项适配
 
 ## 如果继续投入时间，我会如何扩展

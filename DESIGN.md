@@ -145,3 +145,19 @@ Deploy    (html, sha)                                            // 部署产物
 **BYOK**（`lib/byok.ts`）：用户自有 OpenAI 兼容 Key（Base URL / Key / 模型 ID），仅存浏览器 localStorage，随请求传入，服务端仅当次内存使用（不落库、不打日志）。
 
 **可观测**：`Project.provider` 记录每次生成路径（`opencode:<id>` | `byok:<id>` | `mock`）；`run_started` 事件 + 工作日志「模型调用」卡片（Provider / Model / Request ID / 首 Token 延迟）；流内错误（404/429/403）还原为可操作提示，不显示模糊的「No output generated」。
+
+## 11. 复核点 → 架构模块映射
+
+> 复核意见 7 条的**落地位置**（功能说明与实测证据见 `README.md` 的「技术复核对照表」）。
+
+| # | 复核点 | 架构落点 |
+|---|---|---|
+| 1 | React 入口/依赖/校验；生成超时、失败落库、重试收敛；前后端最终一致 | §4 `lib/app-meta.ts`（入口/语言同源判定）+ `lib/sandbox.ts`（依赖/语法/const/import 校验）；§3 空闲看门狗 + 管线总闸；`lib/run-registry.ts`（陈旧 building 自愈 + 409）；§5 `syncFromDb` 三出口收敛 |
+| 2 | 真实命中 Provider，区分 mock 路径 | §10 `Project.provider` / `run_started` / 模型调用卡片 / `ProjectVersion.provider`；`GET /api/status`（hasModel + 网关探测）；mock 横幅 |
+| 3 | 计算器/贪吃蛇/两轮增量逐轮核对 | §3 管线 + 增量 diff 修改；§6 版本 SHA-256；§6 部署 bundle（编译级 Preview 证据） |
+| 4 | 刷新/退出/重登恢复；Preview 重渲染 | §1 只读/恢复路由 + §8 全状态 DB 恢复 + 对话 hydration 修复；§6 部署页 iframe 零 CDN 兜底 |
+| 5 | 版本历史/切换/真实回滚，源码与 Preview 同步 | §6 `ProjectVersion` append-only + `$transaction` 回滚 + `resetFiles` → 画布重编译 |
+| 6 | 部署范围 + 可访问链接 + 构建 SHA | §6 `lib/bundler.ts`（esbuild）+ `/app/:id`（公开）+ `scripts/build-info.mjs`（平台 commit SHA 直链 GitHub）；Python 范围声明 |
+| 7 | 详情/文件/ZIP 权限边界 | §7 `requireProjectAccess`（401/403/409/503）+ 已发布只读例外；§9 API 权限列 |
+
+**复核之外的延展**（同为架构组成）：§2 意图路由（QA 直答 / VERSION 确定性）、§7「发现」公开社区、§10 BYOK、§1 只读模式、§6 画布零 CDN 兜底。
